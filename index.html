@@ -1,0 +1,903 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="Receipts">
+<meta name="theme-color" content="#0d0f12">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" href="icon-180.png">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Receipt Scanner</title>
+<style>
+  :root {
+    --bg: #0d0f12; --panel: #171a1f; --line: #2a2f37; --text: #f2f4f7; --muted: #a3aab5;
+    --accent: #3ddc84; --warn: #ffb020; --bad: #ff5d5d;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; overflow-x: hidden; }
+  button { font: inherit; color: inherit; border: 0; cursor: pointer; min-height: 44px; }
+  [hidden] { display: none !important; }
+
+  #app { display: flex; flex-direction: column; height: 100%; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: calc(env(safe-area-inset-top) + 8px) 16px 8px; }
+  header h1 { font-size: 17px; margin: 0; font-weight: 600; }
+  .chip { background: var(--panel); border: 1px solid var(--line); border-radius: 22px; padding: 0 14px; font-size: 14px; }
+  .chip.on { background: var(--accent); color: #062b16; border-color: var(--accent); font-weight: 600; }
+
+  #stage { position: relative; flex: 1 1 auto; min-height: 0; background: #000; overflow: hidden; }
+  #video, #still { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+  #overlay { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
+  #hint { position: absolute; left: 16px; right: 16px; top: 12px; text-align: center; }
+  #hint span { display: inline-block; background: rgba(0,0,0,.65); padding: 8px 14px; border-radius: 20px; font-size: 15px; }
+  #sections { position: absolute; left: 16px; bottom: 12px; background: rgba(0,0,0,.65);
+    padding: 6px 12px; border-radius: 16px; font-size: 14px; }
+
+  .controls { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 14px 16px calc(env(safe-area-inset-bottom) + 14px); background: var(--bg); }
+  .controls .side { flex: 1 1 0; min-width: 0; display: flex; }
+  .controls .side.right { justify-content: flex-end; }
+  .btn { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 0 14px; font-size: 15px; }
+  .btn.primary { background: var(--accent); color: #062b16; border-color: var(--accent); font-weight: 600; }
+  #shutter { width: 72px; height: 72px; border-radius: 50%; background: #fff; border: 5px solid #555; flex: 0 0 auto; position: relative; }
+  #shutter svg { position: absolute; inset: -9px; width: 80px; height: 80px; transform: rotate(-90deg); pointer-events: none; }
+
+  #countdown { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%);
+    background: rgba(0,0,0,.75); padding: 8px 16px; border-radius: 20px; font-size: 15px; white-space: nowrap; }
+
+  #log { max-height: 34vh; overflow-y: auto; background: var(--panel); border-top: 1px solid var(--line); }
+  #log:empty { display: none; }
+  .row { display: flex; gap: 10px; align-items: flex-start; padding: 10px 16px; border-bottom: 1px solid var(--line); }
+  .row img { width: 40px; height: 52px; object-fit: cover; border-radius: 4px; flex: 0 0 auto; background: #222; }
+  .row .txt { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+  .row .st { font-size: 13px; color: var(--muted); }
+  .row.ok .st { color: var(--accent); }
+  .row.bad .st { color: var(--bad); }
+  .row.wait .st { color: var(--warn); }
+  .row button { flex: 0 0 auto; }
+
+  #conn { display: flex; align-items: center; gap: 8px; padding: 8px 16px; font-size: 14px; background: var(--panel);
+    border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+  #conn .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--warn); flex: 0 0 auto; }
+  #conn.ok .dot { background: var(--accent); }
+  #conn.bad { background: #3a1416; }
+  #conn.bad .dot { background: var(--bad); }
+  #conn .msg { flex: 1 1 auto; min-width: 0; }
+  #conn button { flex: 0 0 auto; white-space: nowrap; min-height: 36px; }
+  #setup { position: fixed; inset: 0; z-index: 10; background: var(--bg); overflow-y: auto; padding: calc(env(safe-area-inset-top) + 24px) 16px 32px; }
+  #setup h2 { font-size: 20px; margin: 0 0 12px; }
+  #setup p { color: var(--muted); }
+  #setup input { width: 100%; min-width: 0; font: 15px monospace; padding: 12px; border-radius: 10px; border: 1px solid var(--line);
+    background: var(--panel); color: var(--text); margin: 4px 0 14px; }
+  #fallback { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 14px; padding: 24px; text-align: center; color: var(--muted); }
+  #fallback .btn { min-width: 220px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="setup" hidden>
+    <h2>Connect to your spreadsheet</h2>
+    <p>Open this app from the link in your spreadsheet: <b>Receipts menu &rarr; Scanner app link</b>. It connects by itself.</p>
+    <p>Or paste the two values here:</p>
+    <label>Web app URL<input id="setUrl" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+    <label>Key<input id="setKey" placeholder="64 letters and numbers" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+    <button id="setSave" class="btn primary">Connect</button>
+  </div>
+  <header>
+    <h1>Receipt Scanner</h1>
+    <button id="longBtn" class="chip" aria-pressed="false">Long receipt</button>
+  </header>
+  <div id="conn"><span class="dot"></span><span class="msg">Connecting to your spreadsheet…</span><button id="connRetry" class="btn" hidden>Retry</button></div>
+
+  <div id="stage">
+    <video id="video" playsinline muted autoplay></video>
+    <canvas id="still" hidden></canvas>
+    <canvas id="overlay"></canvas>
+    <div id="hint"><span>Starting camera…</span></div>
+    <div id="sections" hidden></div>
+    <div id="countdown" hidden></div>
+    <div id="fallback" hidden>
+      <div id="fallbackMsg">The live camera isn't available here.</div>
+      <label class="btn primary" style="display:flex;align-items:center;justify-content:center">
+        Take a photo<input id="fileCam" type="file" accept="image/*" capture="environment" hidden>
+      </label>
+      <label class="btn" style="display:flex;align-items:center;justify-content:center">
+        Choose from photos<input id="filePick" type="file" accept="image/*" hidden>
+      </label>
+    </div>
+  </div>
+
+  <div class="controls" id="camControls">
+    <div class="side"><label class="btn" style="display:flex;align-items:center">Photos<input id="filePick2" type="file" accept="image/*" hidden></label></div>
+    <button id="shutter" aria-label="Take photo now">
+      <svg viewBox="0 0 80 80"><circle id="ring" cx="40" cy="40" r="37" fill="none" stroke="#3ddc84" stroke-width="5"
+        stroke-dasharray="232.5" stroke-dashoffset="232.5"/></svg>
+    </button>
+    <div class="side right"><button id="finishBtn" class="btn primary" hidden>Done</button></div>
+  </div>
+
+  <div class="controls" id="reviewControls" hidden>
+    <div class="side"><button id="retakeBtn" class="btn">Retake</button></div>
+    <button id="fullBtn" class="btn">Whole photo</button>
+    <div class="side right"><button id="useBtn" class="btn primary">Use</button></div>
+  </div>
+
+  <div id="log"></div>
+</div>
+
+<!-- ======================= image maths: pure functions, no page access ======================= -->
+<script id="core">
+var Core = (function () {
+  'use strict';
+
+  // RGBA -> 8-bit grey (Rec.601 weights).
+  function toGray(rgba, w, h) {
+    var g = new Uint8Array(w * h);
+    for (var i = 0, j = 0; i < g.length; i++, j += 4) g[i] = (rgba[j] * 77 + rgba[j + 1] * 150 + rgba[j + 2] * 29) >> 8;
+    return g;
+  }
+
+  function otsu(g) {
+    var hist = new Array(256).fill(0), n = g.length, sum = 0, i;
+    for (i = 0; i < n; i++) hist[g[i]]++;
+    for (i = 0; i < 256; i++) sum += i * hist[i];
+    var sumB = 0, wB = 0, best = 0, t = 128;
+    for (i = 0; i < 256; i++) {
+      wB += hist[i]; if (!wB) continue;
+      var wF = n - wB; if (!wF) break;
+      sumB += i * hist[i];
+      var mB = sumB / wB, mF = (sum - sumB) / wF, v = wB * wF * (mB - mF) * (mB - mF);
+      if (v > best) { best = v; t = i; }
+    }
+    return t;
+  }
+
+  function polyArea(q) {
+    var a = 0;
+    for (var i = 0; i < 4; i++) { var p = q[i], r = q[(i + 1) % 4]; a += p[0] * r[1] - r[0] * p[1]; }
+    return Math.abs(a) / 2;
+  }
+
+  function isConvex(q) {
+    var sign = 0;
+    for (var i = 0; i < 4; i++) {
+      var a = q[i], b = q[(i + 1) % 4], c = q[(i + 2) % 4];
+      var z = (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]);
+      if (z === 0) return false;
+      if (!sign) sign = z > 0 ? 1 : -1; else if ((z > 0 ? 1 : -1) !== sign) return false;
+    }
+    return true;
+  }
+
+  // Finds a receipt: the largest bright, roughly four-sided region in the frame.
+  // Returns { quad: [TL, TR, BR, BL] in this image's pixels, area: fraction of frame } or null.
+  function detect(gray, w, h) {
+    var t = otsu(gray);
+    var i;
+    if (t < 70) return null;                         // nothing paper-bright in view
+    var bin = new Uint8Array(w * h);
+    for (i = 0; i < bin.length; i++) bin[i] = gray[i] > t ? 1 : 0;
+
+    var label = new Int32Array(w * h), stack = new Int32Array(w * h), next = 1, best = null;
+    for (var s = 0; s < bin.length; s++) {
+      if (!bin[s] || label[s]) continue;
+      var top = 0, size = 0, id = next++;
+      var minS = Infinity, maxS = -Infinity, minD = Infinity, maxD = -Infinity;
+      var tl, br, tr, bl, minX = w, maxX = 0, minY = h, maxY = 0;
+      stack[top++] = s; label[s] = id;
+      while (top) {
+        var p = stack[--top], x = p % w, y = (p - x) / w;
+        size++;
+        var su = x + y, di = x - y;
+        if (su < minS) { minS = su; tl = [x, y]; }
+        if (su > maxS) { maxS = su; br = [x, y]; }
+        if (di > maxD) { maxD = di; tr = [x, y]; }
+        if (di < minD) { minD = di; bl = [x, y]; }
+        if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; if (y > maxY) maxY = y;
+        if (x > 0 && bin[p - 1] && !label[p - 1]) { label[p - 1] = id; stack[top++] = p - 1; }
+        if (x < w - 1 && bin[p + 1] && !label[p + 1]) { label[p + 1] = id; stack[top++] = p + 1; }
+        if (y > 0 && bin[p - w] && !label[p - w]) { label[p - w] = id; stack[top++] = p - w; }
+        if (y < h - 1 && bin[p + w] && !label[p + w]) { label[p + w] = id; stack[top++] = p + w; }
+      }
+      if (!best || size > best.size) best = { size: size, quad: [tl, tr, br, bl], box: [minX, minY, maxX, maxY] };
+    }
+    if (!best) return null;
+    var frame = w * h, q = best.quad;
+    var bw = best.box[2] - best.box[0] + 1, bh = best.box[3] - best.box[1] + 1;
+    if (best.size < 0.06 * frame) return null;                // too small / too far away
+    if (bw > 0.97 * w && bh > 0.97 * h) return null;          // bright background, not a receipt
+    if (!isConvex(q)) return null;
+    var qa = polyArea(q);
+    if (qa < 0.06 * frame) return null;
+    if (best.size / qa < 0.55) return null;                   // a blob, not a sheet of paper
+    for (i = 0; i < 4; i++) {                                  // no two corners on top of each other
+      var a = q[i], b = q[(i + 1) % 4];
+      if (Math.hypot(a[0] - b[0], a[1] - b[1]) < 0.08 * Math.min(w, h)) return null;
+    }
+    return { quad: q, area: qa / frame };
+  }
+
+  // Grows a quad outward from its centre so the crop keeps the paper's edge.
+  function expand(q, f, w, h) {
+    var cx = (q[0][0] + q[1][0] + q[2][0] + q[3][0]) / 4, cy = (q[0][1] + q[1][1] + q[2][1] + q[3][1]) / 4;
+    return q.map(function (p) {
+      return [Math.min(w - 1, Math.max(0, cx + (p[0] - cx) * (1 + f))),
+              Math.min(h - 1, Math.max(0, cy + (p[1] - cy) * (1 + f)))];
+    });
+  }
+
+  function maxCornerShift(a, b) {
+    var m = 0;
+    for (var i = 0; i < 4; i++) m = Math.max(m, Math.hypot(a[i][0] - b[i][0], a[i][1] - b[i][1]));
+    return m;
+  }
+
+  function meanAbsDiff(a, b) {
+    if (!a || !b || a.length !== b.length) return 255;
+    var s = 0;
+    for (var i = 0; i < a.length; i++) s += Math.abs(a[i] - b[i]);
+    return s / a.length;
+  }
+
+  // Homography taking (u,v) in the output rectangle to (x,y) in the photo.
+  function homography(src, W, H) {
+    var dst = [[0, 0], [W, 0], [W, H], [0, H]], A = [], B = [], i, j, k;
+    for (i = 0; i < 4; i++) {
+      var u = dst[i][0], v = dst[i][1], x = src[i][0], y = src[i][1];
+      A.push([u, v, 1, 0, 0, 0, -u * x, -v * x]); B.push(x);
+      A.push([0, 0, 0, u, v, 1, -u * y, -v * y]); B.push(y);
+    }
+    for (i = 0; i < 8; i++) {
+      var piv = i;
+      for (j = i + 1; j < 8; j++) if (Math.abs(A[j][i]) > Math.abs(A[piv][i])) piv = j;
+      var tmp = A[i]; A[i] = A[piv]; A[piv] = tmp; tmp = B[i]; B[i] = B[piv]; B[piv] = tmp;
+      for (j = i + 1; j < 8; j++) {
+        var f = A[j][i] / A[i][i];
+        for (k = i; k < 8; k++) A[j][k] -= f * A[i][k];
+        B[j] -= f * B[i];
+      }
+    }
+    var h = new Array(8);
+    for (i = 7; i >= 0; i--) {
+      var sum = B[i];
+      for (k = i + 1; k < 8; k++) sum -= A[i][k] * h[k];
+      h[i] = sum / A[i][i];
+    }
+    return h;
+  }
+
+  // Output size for a quad: its real width/height, capped so text stays sharp without huge files.
+  function outputSize(q, maxW) {
+    var wTop = Math.hypot(q[1][0] - q[0][0], q[1][1] - q[0][1]), wBot = Math.hypot(q[2][0] - q[3][0], q[2][1] - q[3][1]);
+    var hL = Math.hypot(q[3][0] - q[0][0], q[3][1] - q[0][1]), hR = Math.hypot(q[2][0] - q[1][0], q[2][1] - q[1][1]);
+    var W = (wTop + wBot) / 2, H = (hL + hR) / 2, s = Math.min(1, maxW / W);
+    return { w: Math.max(8, Math.round(W * s)), h: Math.max(8, Math.round(H * s)) };
+  }
+
+  // Flattens the receipt: perspective-corrects the quad into a W x H greyscale image,
+  // then stretches contrast so the paper is white and the print is black.
+  function warp(gray, sw, sh, q, W, H) {
+    var h = homography(q, W, H), out = new Uint8ClampedArray(W * H * 4), g = new Uint8Array(W * H), hist = new Uint32Array(256);
+    for (var v = 0; v < H; v++) {
+      for (var u = 0; u < W; u++) {
+        var d = h[6] * (u + 0.5) + h[7] * (v + 0.5) + 1;
+        var x = (h[0] * (u + 0.5) + h[1] * (v + 0.5) + h[2]) / d - 0.5;
+        var y = (h[3] * (u + 0.5) + h[4] * (v + 0.5) + h[5]) / d - 0.5;
+        if (x < 0) x = 0; if (y < 0) y = 0; if (x > sw - 1.001) x = sw - 1.001; if (y > sh - 1.001) y = sh - 1.001;
+        var x0 = x | 0, y0 = y | 0, fx = x - x0, fy = y - y0, i0 = y0 * sw + x0;
+        var top = gray[i0] + (gray[i0 + 1] - gray[i0]) * fx;
+        var bot = gray[i0 + sw] + (gray[i0 + sw + 1] - gray[i0 + sw]) * fx;
+        var val = (top + (bot - top) * fy) | 0;
+        g[v * W + u] = val; hist[val]++;
+      }
+    }
+    var n = W * H, lo = 0, hi = 255, c = 0;
+    for (var i = 0; i < 256; i++) { c += hist[i]; if (c >= n * 0.01) { lo = i; break; } }
+    c = 0;
+    for (i = 255; i >= 0; i--) { c += hist[i]; if (c >= n * 0.25) { hi = i; break; } }  // paper is most of the page
+    if (hi - lo < 24) { lo = 0; hi = 255; }
+    var scale = 255 / (hi - lo);
+    for (i = 0; i < n; i++) {
+      var o = (g[i] - lo) * scale;
+      o = o < 0 ? 0 : o > 255 ? 255 : o;
+      out[i * 4] = out[i * 4 + 1] = out[i * 4 + 2] = o; out[i * 4 + 3] = 255;
+    }
+    return out;
+  }
+
+  // Cuts a tall image into overlapping pages so every page keeps readable text after the API
+  // scales it to fit. Returns [{y, h}] in output pixels.
+  function pageSlices(W, H) {
+    // The API shrinks any image taller than ~1568 px, so only a taller one is worth splitting.
+    var pageH = Math.round(W * 1.5);
+    if (H <= Math.max(pageH * 1.15, 1700)) return [{ y: 0, h: H }];
+    // Fewest pages that still overlap by at least 15%, spread evenly from top to bottom.
+    var step = pageH * 0.85, n = Math.ceil((H - pageH) / step) + 1, out = [];
+    for (var i = 0; i < n; i++) out.push({ y: Math.round(i * (H - pageH) / (n - 1)), h: pageH });
+    return out;
+  }
+
+  // Minimal PDF: one JPEG per page, drawn at 200 dpi.
+  function buildPdf(pages) {
+    var chunks = [], pos = 0, offs = [], enc = new TextEncoder();
+    function put(x) { var b = typeof x === 'string' ? enc.encode(x) : x; chunks.push(b); pos += b.length; }
+    function obj(num, parts) { offs[num] = pos; put(num + ' 0 obj\n'); parts.forEach(put); put('\nendobj\n'); }
+    put('%PDF-1.4\n'); put(new Uint8Array([37, 226, 227, 207, 211, 10]));
+    var n = pages.length, total = 2 + 3 * n, kids = [];
+    for (var i = 0; i < n; i++) kids.push((3 + 3 * i) + ' 0 R');
+    obj(1, ['<< /Type /Catalog /Pages 2 0 R >>']);
+    obj(2, ['<< /Type /Pages /Kids [' + kids.join(' ') + '] /Count ' + n + ' >>']);
+    pages.forEach(function (p, i) {
+      var pg = 3 + 3 * i, im = pg + 1, ct = pg + 2;
+      var pw = (p.width * 72 / 200).toFixed(2), ph = (p.height * 72 / 200).toFixed(2);
+      var content = 'q ' + pw + ' 0 0 ' + ph + ' 0 0 cm /Im0 Do Q';
+      obj(pg, ['<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ' + pw + ' ' + ph + '] /Resources << /XObject << /Im0 ' +
+               im + ' 0 R >> >> /Contents ' + ct + ' 0 R >>']);
+      obj(im, ['<< /Type /XObject /Subtype /Image /Width ' + p.width + ' /Height ' + p.height +
+               ' /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ' + p.jpeg.length + ' >>\nstream\n',
+               p.jpeg, '\nendstream']);
+      obj(ct, ['<< /Length ' + content.length + ' >>\nstream\n' + content + '\nendstream']);
+    });
+    var xref = pos, x = 'xref\n0 ' + (total + 1) + '\n0000000000 65535 f \n';
+    for (i = 1; i <= total; i++) x += String(offs[i]).padStart(10, '0') + ' 00000 n \n';
+    put(x + 'trailer\n<< /Size ' + (total + 1) + ' /Root 1 0 R >>\nstartxref\n' + xref + '\n%%EOF\n');
+    var outArr = new Uint8Array(pos), o = 0;
+    chunks.forEach(function (c) { outArr.set(c, o); o += c.length; });
+    return outArr;
+  }
+
+  // Auto-capture: fires once the receipt has been found in the same place, with the picture
+  // still, for long enough. `rearm` stops the same receipt being captured twice in a row.
+  function Tracker(opts) {
+    this.need = opts.need || 8;        // consecutive steady frames (~100 ms each)
+    this.maxShift = opts.maxShift;     // px in detection space
+    this.maxMotion = opts.maxMotion || 6;
+    this.history = [];
+    this.armed = true;
+    this.lastCaptureGray = null;
+  }
+  Tracker.prototype.update = function (det, gray, prevGray) {
+    var motion = Core.meanAbsDiff(gray, prevGray);
+    if (!this.armed) {
+      if (!det || Core.meanAbsDiff(gray, this.lastCaptureGray) > 18) this.armed = true;
+      this.history = [];
+      return { progress: 0, fire: false, armed: false };
+    }
+    if (!det || det.area < 0.08 || motion > this.maxMotion) { this.history = []; return { progress: 0, fire: false, armed: true }; }
+    var last = this.history[this.history.length - 1];
+    if (last && Core.maxCornerShift(last.quad, det.quad) > this.maxShift) this.history = [];
+    this.history.push(det);
+    var progress = Math.min(1, this.history.length / this.need);
+    return { progress: progress, fire: progress >= 1, armed: true };
+  };
+  Tracker.prototype.captured = function (gray) { this.armed = false; this.lastCaptureGray = gray; this.history = []; };
+
+  return { toGray: toGray, otsu: otsu, detect: detect, expand: expand, maxCornerShift: maxCornerShift,
+           meanAbsDiff: meanAbsDiff, homography: homography, outputSize: outputSize, warp: warp,
+           pageSlices: pageSlices, buildPdf: buildPdf, polyArea: polyArea, Tracker: Tracker };
+})();
+if (typeof module !== 'undefined') module.exports = Core;
+</script>
+
+<!-- ======================= the app ======================= -->
+<script>
+(function () {
+  'use strict';
+  if (typeof document === 'undefined') return;
+
+  var DET_W = 240;               // detection runs on a small copy of each frame
+  var MAX_SRC = 3000;            // longest side of the photo kept for cropping
+  var OUT_W = 1400;              // width of the flattened receipt
+  var AUTO_SEND_S = 3;           // seconds to look at the crop before it sends itself
+
+  // ---------------------------------------------------------------- connection settings
+  // The link from the spreadsheet carries them after the # (never sent to any web server):
+  //   …/receipt-scanner/#u=<web app URL>&k=<key>
+  // They are also remembered on this phone, in case the app is opened without them.
+  var CFG = readConfig();
+  function readConfig() {
+    var h = new URLSearchParams(location.hash.replace(/^#/, ''));
+    var c = { url: h.get('u') || '', key: h.get('k') || '' };
+    try {
+      if (c.url && c.key) localStorage.setItem('receiptScanner', JSON.stringify(c));
+      else c = JSON.parse(localStorage.getItem('receiptScanner') || 'null') || c;
+    } catch (e) { /* private mode: the link itself still works */ }
+    return c;
+  }
+  function validUrl(u) { return /^https:\/\/script\.google\.com\/(a\/[^/]+\/)?macros\/s\/[A-Za-z0-9_-]{20,}\/exec$/.test(u); }
+  var $ = function (id) { return document.getElementById(id); };
+  var video = $('video'), overlay = $('overlay'), still = $('still'), hint = $('hint').firstChild;
+  var ctxO = overlay.getContext('2d');
+  var small = document.createElement('canvas'), ctxS = small.getContext('2d', { willReadFrequently: true });
+
+  var state = 'starting';        // starting | live | review | busy | nocam
+  var longMode = false, sections = [];
+  var tracker = null, prevGray = null, lastDet = null, loopTimer = null;
+  var shot = null;               // { canvas, gray, w, h, quad }  - the photo under review
+  var countdownTimer = null, drag = -1;
+
+  // ---------------------------------------------------------------- server calls
+  // One request to the spreadsheet's script. Plain-text body = no CORS preflight; no cookies =
+  // no Google sign-in involved. Google answers with a redirect to the JSON, which fetch follows.
+  function api(action, extra, timeoutMs) {
+    var body = { action: action, key: CFG.key };
+    for (var k in extra) body[k] = extra[k];
+    var ctl = new AbortController(), t = setTimeout(function () { ctl.abort(); }, timeoutMs || 90000);
+    return fetch(CFG.url, {
+      method: 'POST', body: JSON.stringify(body), credentials: 'omit', redirect: 'follow',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' }, signal: ctl.signal
+    }).then(function (res) {
+      return res.text().then(function (txt) {
+        var json = null;
+        try { json = JSON.parse(txt); } catch (e) { /* not JSON: Google error page */ }
+        if (!res.ok || !json) throw new Error('The spreadsheet\'s script answered with an error page (HTTP ' + res.status +
+          '). The web app URL is wrong, or the deployment is not set to "Who has access: Anyone".');
+        if (!json.ok) throw new Error(json.error || 'Request failed');
+        return json;
+      });
+    }, function (e) {
+      throw new Error(e && e.name === 'AbortError' ? 'The spreadsheet\'s script took too long to answer.'
+        : (navigator.onLine === false ? 'No internet connection.'
+          : 'Could not reach the spreadsheet\'s script. Check the web app URL, and that the deployment is set to "Who has access: Anyone".'));
+    }).finally(function () { clearTimeout(t); });
+  }
+
+  // ---------------------------------------------------------------- connection check
+  var connected = false;
+  function setConn(kind, msg, retry) {
+    $('conn').className = kind; $('conn').querySelector('.msg').textContent = msg; $('connRetry').hidden = !retry;
+  }
+  function checkConnection() {
+    if (!CFG.url || !CFG.key || !validUrl(CFG.url)) { showSetup(); return Promise.resolve(false); }
+    setConn('', 'Connecting to your spreadsheet…');
+    return api('ping', {}, 30000).then(function (r) {
+      connected = true;
+      if (r.problems && r.problems.length) setConn('bad', 'Connected to “' + r.sheet + '”, but: ' + r.problems.join(' '), true);
+      else setConn('ok', 'Connected to “' + r.sheet + '”');
+      return true;
+    }, function (e) {
+      connected = false;
+      setConn('bad', /^KEY:/.test(e.message) ? e.message.replace(/^KEY:\s*/, '') : e.message, true);
+      return false;
+    });
+  }
+  function showSetup() {
+    $('setup').hidden = false;
+    $('setUrl').value = CFG.url || ''; $('setKey').value = CFG.key || '';
+    setConn('bad', 'Not connected to a spreadsheet yet.', false);
+  }
+  $('setSave').onclick = function () {
+    var u = $('setUrl').value.trim().replace(/\?.*$/, ''), k = $('setKey').value.trim();
+    if (!validUrl(u)) { alert('That web app URL should look like https://script.google.com/macros/s/AKfy…/exec'); return; }
+    if (!/^[0-9a-f]{32,}$/i.test(k)) { alert('The key is the long code after k= in the scanner link.'); return; }
+    CFG = { url: u, key: k };
+    try { localStorage.setItem('receiptScanner', JSON.stringify(CFG)); } catch (e) {}
+    history.replaceState(null, '', '#u=' + encodeURIComponent(u) + '&k=' + k);
+    $('setup').hidden = true;
+    checkConnection();
+  };
+  $('connRetry').onclick = function () { checkConnection(); };
+
+  // ---------------------------------------------------------------- camera
+  var IOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  var IN_APP = /FBAN|FBAV|FB_IAB|FBIOS|Messenger|Instagram|Line\/|WhatsApp|Snapchat|LinkedInApp/i.test(navigator.userAgent);
+
+  function startCamera() {
+    if (IN_APP) return noCamera('This is open inside Facebook / Messenger, which blocks the camera. ' +
+      'Tap \u2022\u2022\u2022 (top right) \u2192 Open in ' + (IOS ? 'Safari' : 'browser') + '. Until then you can still use:');
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return noCamera('This browser has no live camera access.');
+    navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 3840 }, height: { ideal: 2160 } }
+    }).then(function (stream) {
+      video.srcObject = stream;
+      return video.play();
+    }).then(function () {
+      state = 'live';
+      tracker = null;
+      setHint('Hold the phone over the receipt');
+      loop();
+    }).catch(function (e) {
+      noCamera(e && e.name === 'NotAllowedError'
+        ? (IOS ? 'Camera access is blocked for this site. Safari: tap aA in the address bar \u2192 Website Settings \u2192 Camera \u2192 Allow, then reload. ' +
+                 'Chrome on iPhone: Settings app \u2192 Apps \u2192 Chrome \u2192 Camera on. Meanwhile:'
+               : 'Camera access is blocked. Tap the lock/settings icon by the address \u2192 Permissions \u2192 Camera \u2192 Allow, then reload. Meanwhile:')
+        : 'The live camera isn\'t available here. You can still take a photo:');
+    });
+  }
+
+  function noCamera(msg) {
+    state = 'nocam';
+    $('fallbackMsg').textContent = msg;
+    $('fallback').hidden = false;
+    $('camControls').hidden = true;
+    setHint('');
+  }
+
+  // ---------------------------------------------------------------- live detection loop
+  function loop() {
+    clearTimeout(loopTimer);
+    if (state !== 'live') return;
+    var vw = video.videoWidth, vh = video.videoHeight;
+    if (vw && vh) {
+      var sw = DET_W, sh = Math.round(vh * DET_W / vw);
+      if (small.width !== sw || small.height !== sh) { small.width = sw; small.height = sh; }
+      ctxS.drawImage(video, 0, 0, sw, sh);
+      var gray = Core.toGray(ctxS.getImageData(0, 0, sw, sh).data, sw, sh);
+      var det = Core.detect(gray, sw, sh);
+      if (!tracker) tracker = new Core.Tracker({ need: 8, maxShift: 0.03 * sw, maxMotion: 6 });
+      var r = tracker.update(det, gray, prevGray);
+      prevGray = gray; lastDet = det;
+      drawLive(det, sw, sh, r);
+      if (r.fire) { tracker.captured(gray); capture(det, sw); return; }
+    }
+    loopTimer = setTimeout(loop, 90);
+  }
+
+  function setHint(t) { hint.textContent = t; hint.parentNode.hidden = !t; }
+
+  // Maps a point in source pixels (sw x sh) to the overlay, which shows the video "contain"-fitted.
+  function fitMap(sw, sh) {
+    var W = overlay.clientWidth, H = overlay.clientHeight, s = Math.min(W / sw, H / sh);
+    return { s: s, ox: (W - sw * s) / 2, oy: (H - sh * s) / 2, W: W, H: H };
+  }
+
+  function sizeOverlay() {
+    var dpr = window.devicePixelRatio || 1;
+    var W = overlay.clientWidth, H = overlay.clientHeight;
+    if (overlay.width !== Math.round(W * dpr)) { overlay.width = Math.round(W * dpr); overlay.height = Math.round(H * dpr); }
+    ctxO.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctxO.clearRect(0, 0, W, H);
+  }
+
+  function drawQuad(q, m, color, fill) {
+    ctxO.beginPath();
+    q.forEach(function (p, i) {
+      var x = m.ox + p[0] * m.s, y = m.oy + p[1] * m.s;
+      if (i) ctxO.lineTo(x, y); else ctxO.moveTo(x, y);
+    });
+    ctxO.closePath();
+    if (fill) { ctxO.fillStyle = fill; ctxO.fill(); }
+    ctxO.lineWidth = 3; ctxO.strokeStyle = color; ctxO.stroke();
+  }
+
+  function drawLive(det, sw, sh, r) {
+    sizeOverlay();
+    var m = fitMap(sw, sh);
+    var ring = $('ring');
+    ring.setAttribute('stroke-dashoffset', String(232.5 * (1 - r.progress)));
+    if (!r.armed) { setHint(longMode ? 'Move down to the next part of the receipt' : 'Next receipt'); return; }
+    if (!det) {
+      // A guide box, like a page scanner, until a receipt is found.
+      var gw = sw * 0.62, gh = sh * 0.8, gx = (sw - gw) / 2, gy = (sh - gh) / 2;
+      ctxO.setLineDash([10, 8]);
+      drawQuad([[gx, gy], [gx + gw, gy], [gx + gw, gy + gh], [gx, gy + gh]], m, 'rgba(255,255,255,.55)');
+      ctxO.setLineDash([]);
+      setHint(longMode && sections.length ? 'Show the next part, overlapping the last one a little'
+                                          : 'Fit the receipt in the box — a dark surface helps');
+      return;
+    }
+    var green = r.progress > 0;
+    drawQuad(det.quad, m, green ? '#3ddc84' : '#ffb020', green ? 'rgba(61,220,132,.18)' : 'rgba(255,176,32,.12)');
+    if (det.area < 0.08) setHint('Move closer');
+    else setHint(r.progress >= 1 ? 'Got it' : 'Hold still…');
+  }
+
+  // ---------------------------------------------------------------- capture
+  function capture(det, detW) {
+    state = 'busy';
+    var vw = video.videoWidth, vh = video.videoHeight, k = Math.min(1, MAX_SRC / Math.max(vw, vh));
+    var cw = Math.round(vw * k), ch = Math.round(vh * k);
+    var c = document.createElement('canvas'); c.width = cw; c.height = ch;
+    c.getContext('2d').drawImage(video, 0, 0, cw, ch);
+    var f = cw / detW;
+    var quad = det ? Core.expand(det.quad.map(function (p) { return [p[0] * f, p[1] * f]; }), 0.025, cw, ch)
+                   : [[0, 0], [cw - 1, 0], [cw - 1, ch - 1], [0, ch - 1]];
+    flash();
+    review(c, quad, true);
+  }
+
+  function flash() {
+    var d = document.createElement('div');
+    d.style.cssText = 'position:absolute;inset:0;background:#fff;opacity:.7;transition:opacity .35s';
+    $('stage').appendChild(d);
+    requestAnimationFrame(function () { d.style.opacity = '0'; });
+    setTimeout(function () { d.remove(); }, 400);
+  }
+
+  function fromFile(file) {
+    if (!file) return;
+    stopLoop();
+    state = 'busy';
+    setHint('Loading photo…');
+    var url = URL.createObjectURL(file), img = new Image();
+    img.onload = function () {
+      var k = Math.min(1, MAX_SRC / Math.max(img.naturalWidth, img.naturalHeight));
+      var cw = Math.round(img.naturalWidth * k), ch = Math.round(img.naturalHeight * k);
+      var c = document.createElement('canvas'); c.width = cw; c.height = ch;
+      c.getContext('2d').drawImage(img, 0, 0, cw, ch);
+      URL.revokeObjectURL(url);
+      var sw = DET_W, sh = Math.round(ch * DET_W / cw);
+      small.width = sw; small.height = sh;
+      ctxS.drawImage(c, 0, 0, sw, sh);
+      var det = Core.detect(Core.toGray(ctxS.getImageData(0, 0, sw, sh).data, sw, sh), sw, sh);
+      var f = cw / sw;
+      var quad = det ? Core.expand(det.quad.map(function (p) { return [p[0] * f, p[1] * f]; }), 0.025, cw, ch)
+                     : [[0, 0], [cw - 1, 0], [cw - 1, ch - 1], [0, ch - 1]];
+      review(c, quad, !!det);
+    };
+    img.onerror = function () { URL.revokeObjectURL(url); alert('That photo could not be opened.'); backToCamera(); };
+    img.src = url;
+  }
+
+  // ---------------------------------------------------------------- review (adjustable corners)
+  function review(canvas, quad, found) {
+    state = 'review';
+    shot = { canvas: canvas, w: canvas.width, h: canvas.height, quad: quad };
+    still.width = canvas.width; still.height = canvas.height;
+    still.getContext('2d').drawImage(canvas, 0, 0);
+    still.hidden = false; video.style.visibility = 'hidden';
+    $('fallback').hidden = true;
+    $('camControls').hidden = true; $('reviewControls').hidden = false;
+    $('useBtn').textContent = longMode ? 'Add section' : 'Send';
+    drawReview();
+    setHint(found ? 'Drag a corner to adjust' : 'Receipt edges not found — drag the corners onto it');
+    if (found) startCountdown(); else stopCountdown();
+  }
+
+  function drawReview() {
+    sizeOverlay();
+    var m = fitMap(shot.w, shot.h);
+    drawQuad(shot.quad, m, '#3ddc84', 'rgba(61,220,132,.15)');
+    shot.quad.forEach(function (p) {
+      ctxO.beginPath();
+      ctxO.arc(m.ox + p[0] * m.s, m.oy + p[1] * m.s, 13, 0, Math.PI * 2);
+      ctxO.fillStyle = '#3ddc84'; ctxO.fill();
+      ctxO.lineWidth = 3; ctxO.strokeStyle = '#062b16'; ctxO.stroke();
+    });
+  }
+
+  function startCountdown() {
+    stopCountdown();
+    var left = AUTO_SEND_S, el = $('countdown'), verb = longMode ? 'Adding' : 'Sending';
+    el.hidden = false; el.textContent = verb + ' in ' + left + '… tap to adjust';
+    countdownTimer = setInterval(function () {
+      left--;
+      if (left <= 0) { stopCountdown(); useShot(); }
+      else el.textContent = verb + ' in ' + left + '… tap to adjust';
+    }, 1000);
+  }
+  function stopCountdown() { clearInterval(countdownTimer); countdownTimer = null; $('countdown').hidden = true; }
+
+  function pointerPos(ev) {
+    var r = overlay.getBoundingClientRect();
+    return [ev.clientX - r.left, ev.clientY - r.top];
+  }
+  overlay.addEventListener('pointerdown', function (ev) {
+    if (state !== 'review') return;
+    stopCountdown();
+    var m = fitMap(shot.w, shot.h), p = pointerPos(ev), bestD = 48;
+    drag = -1;
+    shot.quad.forEach(function (q, i) {
+      var d = Math.hypot(m.ox + q[0] * m.s - p[0], m.oy + q[1] * m.s - p[1]);
+      if (d < bestD) { bestD = d; drag = i; }
+    });
+    if (drag > -1) overlay.setPointerCapture(ev.pointerId);
+  });
+  overlay.addEventListener('pointermove', function (ev) {
+    if (state !== 'review' || drag < 0) return;
+    var m = fitMap(shot.w, shot.h), p = pointerPos(ev);
+    shot.quad[drag] = [Math.min(shot.w - 1, Math.max(0, (p[0] - m.ox) / m.s)),
+                       Math.min(shot.h - 1, Math.max(0, (p[1] - m.oy) / m.s))];
+    drawReview();
+  });
+  overlay.addEventListener('pointerup', function () { drag = -1; });
+
+  // ---------------------------------------------------------------- crop, flatten, package
+  function flatten(s) {
+    var ctx = s.canvas.getContext('2d');
+    var gray = Core.toGray(ctx.getImageData(0, 0, s.w, s.h).data, s.w, s.h);
+    var size = Core.outputSize(s.quad, OUT_W);
+    var px = Core.warp(gray, s.w, s.h, s.quad, size.w, size.h);
+    var c = document.createElement('canvas'); c.width = size.w; c.height = size.h;
+    c.getContext('2d').putImageData(new ImageData(px, size.w, size.h), 0, 0);
+    return c;
+  }
+
+  function jpeg(canvas, q) {
+    return new Promise(function (res) { canvas.toBlob(res, 'image/jpeg', q || 0.85); });
+  }
+
+  // One flattened receipt -> one JPEG, or a PDF of overlapping pages when it is long.
+  function packageScan(flats) {
+    var pieces = [];
+    flats.forEach(function (c) {
+      Core.pageSlices(c.width, c.height).forEach(function (sl) {
+        var p = document.createElement('canvas'); p.width = c.width; p.height = sl.h;
+        p.getContext('2d').drawImage(c, 0, sl.y, c.width, sl.h, 0, 0, c.width, sl.h);
+        pieces.push(p);
+      });
+    });
+    return Promise.all(pieces.map(function (p) { return jpeg(p); })).then(function (blobs) {
+      if (blobs.length === 1) return { blob: blobs[0], mime: 'image/jpeg', ext: 'jpg', pages: 1 };
+      return Promise.all(blobs.map(function (b) { return b.arrayBuffer(); })).then(function (bufs) {
+        var pdf = Core.buildPdf(bufs.map(function (b, i) {
+          return { jpeg: new Uint8Array(b), width: pieces[i].width, height: pieces[i].height };
+        }));
+        return { blob: new Blob([pdf], { type: 'application/pdf' }), mime: 'application/pdf', ext: 'pdf', pages: blobs.length };
+      });
+    });
+  }
+
+  function useShot() {
+    if (state !== 'review') return;
+    stopCountdown();
+    state = 'busy';
+    setHint('Cropping…');
+    // Let the hint paint before the heavy work.
+    setTimeout(function () {
+      var flat = flatten(shot);
+      if (longMode) {
+        sections.push(flat);
+        updateSections();
+        backToCamera();
+      } else {
+        send([flat]);
+        backToCamera();
+      }
+    }, 30);
+  }
+
+  function updateSections() {
+    var el = $('sections');
+    el.hidden = !longMode;
+    el.textContent = sections.length ? sections.length + ' part' + (sections.length > 1 ? 's' : '') + ' captured' : 'Long receipt: start at the top';
+    $('finishBtn').hidden = !(longMode && sections.length);
+  }
+
+  // ---------------------------------------------------------------- upload + follow-up
+  function send(flats) {
+    var thumb = flats[0];
+    var row = addRow(thumb);
+    packageScan(flats).then(function (pkg) {
+      row.pkg = pkg;
+      upload(row);
+    }).catch(function (e) { setRow(row, 'bad', 'Could not prepare the scan: ' + e.message, true); });
+  }
+
+  function stamp() {
+    var d = new Date(), z = function (n) { return String(n).padStart(2, '0'); };
+    return d.getFullYear() + '-' + z(d.getMonth() + 1) + '-' + z(d.getDate()) + '_' + z(d.getHours()) + z(d.getMinutes()) + z(d.getSeconds());
+  }
+
+  function upload(row) {
+    var pkg = row.pkg;
+    setRow(row, 'wait', 'Uploading' + (pkg.pages > 1 ? ' (' + pkg.pages + ' pages)' : '') + '…');
+    blobToBase64(pkg.blob).then(function (b64) {
+      return api('upload', { data: b64, mime: pkg.mime, name: 'scan_' + stamp() + '.' + pkg.ext }, 120000);
+    }).then(function (res) {
+      row.fileId = res.id;
+      setRow(row, 'wait', 'Uploaded — reading the receipt…');
+      // Reads it now instead of waiting for the 10-minute timer. Errors here are fine: status polling follows.
+      api('scan', {}, 240000).catch(function () {});
+      return null;
+    }).then(function () { return follow(row, 0); })
+      .catch(function (e) { setRow(row, 'bad', 'Upload failed: ' + e.message, true); });
+  }
+
+  // Polls where the file has got to; the 10-minute timer is the backstop if this page is closed.
+  function follow(row, n) {
+    return api('status', { id: row.fileId }, 30000).then(function (s) {
+      if (s.status === 'logged') return setRow(row, /Check:/.test(s.message) ? 'wait' : 'ok', s.message);
+      if (s.status === 'failed') return setRow(row, 'bad', s.message);
+      if (n >= 40) return setRow(row, 'wait', 'Still in the inbox — it will be logged within 10 minutes.');
+      setRow(row, 'wait', s.message && /retry/i.test(s.message) ? s.message : 'Reading the receipt…');
+      return new Promise(function (r) { setTimeout(r, n < 6 ? 5000 : 15000); }).then(function () {
+        if (n === 8) api('scan', {}, 240000).catch(function () {});
+        return follow(row, n + 1);
+      });
+    }).catch(function () {
+      return new Promise(function (r) { setTimeout(r, 15000); }).then(function () { return follow(row, n + 1); });
+    });
+  }
+
+  function blobToBase64(blob) {
+    return new Promise(function (res, rej) {
+      var fr = new FileReader();
+      fr.onload = function () { res(String(fr.result).split(',')[1]); };
+      fr.onerror = function () { rej(new Error('could not read the scan')); };
+      fr.readAsDataURL(blob);
+    });
+  }
+
+  function addRow(canvas) {
+    var row = document.createElement('div');
+    row.className = 'row wait';
+    var img = document.createElement('img');
+    var t = document.createElement('canvas'), k = 80 / canvas.width;
+    t.width = 80; t.height = Math.max(1, Math.round(canvas.height * k));
+    t.getContext('2d').drawImage(canvas, 0, 0, t.width, t.height);
+    img.src = t.toDataURL('image/jpeg', 0.7);
+    var txt = document.createElement('div'); txt.className = 'txt';
+    var title = document.createElement('div'); title.textContent = 'Receipt ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    var st = document.createElement('div'); st.className = 'st';
+    txt.appendChild(title); txt.appendChild(st);
+    row.appendChild(img); row.appendChild(txt);
+    $('log').prepend(row);
+    return { el: row, st: st, retry: null };
+  }
+
+  function setRow(row, kind, msg, canRetry) {
+    row.el.className = 'row ' + kind;
+    row.st.textContent = msg;
+    if (row.retry) { row.retry.remove(); row.retry = null; }
+    if (canRetry && row.pkg) {
+      var b = document.createElement('button'); b.className = 'btn'; b.textContent = 'Retry';
+      b.onclick = function () { upload(row); };
+      row.el.appendChild(b); row.retry = b;
+    }
+  }
+
+  // ---------------------------------------------------------------- navigation
+  function stopLoop() { clearTimeout(loopTimer); }
+
+  function backToCamera() {
+    shot = null;
+    still.hidden = true; video.style.visibility = '';
+    $('reviewControls').hidden = true;
+    if (!video.srcObject) {          // no live camera: back to the photo buttons
+      $('fallback').hidden = false; state = 'nocam'; sizeOverlay(); setHint('');
+      return;
+    }
+    $('camControls').hidden = false;
+    state = 'live';
+    loop();
+  }
+
+  $('shutter').onclick = function () {
+    if (state !== 'live') return;
+    stopLoop();
+    if (tracker && prevGray) tracker.captured(prevGray);
+    capture(lastDet, small.width);
+  };
+  $('useBtn').onclick = useShot;
+  $('retakeBtn').onclick = function () { stopCountdown(); backToCamera(); };
+  $('fullBtn').onclick = function () {
+    if (!shot) return;
+    stopCountdown();
+    shot.quad = [[0, 0], [shot.w - 1, 0], [shot.w - 1, shot.h - 1], [0, shot.h - 1]];
+    drawReview();
+  };
+  $('finishBtn').onclick = function () {
+    if (!sections.length) return;
+    send(sections.slice());
+    sections = [];
+    updateSections();
+  };
+  $('longBtn').onclick = function () {
+    if (longMode && sections.length && !confirm('Discard the ' + sections.length + ' part(s) captured so far?')) return;
+    longMode = !longMode; sections = [];
+    this.classList.toggle('on', longMode);
+    this.setAttribute('aria-pressed', String(longMode));
+    updateSections();
+    if (state === 'review') $('useBtn').textContent = longMode ? 'Add section' : 'Send';
+  };
+  ['fileCam', 'filePick', 'filePick2'].forEach(function (id) {
+    $(id).addEventListener('change', function () { fromFile(this.files[0]); this.value = ''; });
+  });
+  window.addEventListener('resize', function () { if (state === 'review') drawReview(); });
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden && state === 'live') loop();
+  });
+
+  checkConnection();
+  startCamera();
+})();
+</script>
+</body>
+</html>
