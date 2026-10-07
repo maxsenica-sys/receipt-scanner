@@ -26,7 +26,7 @@ const MAX_TRIES = 6;                    // temporary problems are retried this m
 const TOTAL_TOLERANCE = 0.02;
 const FOLDERS = { inbox: 'Receipts Inbox', processed: 'Receipts Processed', failed: 'Receipts Failed' };
 const COL = { date:1, merchant:2, item:3, original:4, category:5, qty:6, unit:7, line:8,
-              currency:9, aud:10, payment:11, file:12, id:13, flag:14 };
+              currency:9, aud:10, payment:11, file:12, id:13, flag:14, tag:15 };
 
 // ------------------------------------------------------------------ menu / setup
 function onOpen() {
@@ -166,10 +166,11 @@ function doPost(e) {
     const req = JSON.parse((e && e.postData && e.postData.contents) || '{}');
     checkKey_(req.key);
     switch (req.action) {
-      case 'ping':   out = ping_(); break;
-      case 'upload': out = uploadReceipt_(req.data, req.mime, req.name); break;
-      case 'scan':   out = runScan_(60000); break;
-      case 'status': out = receiptStatus_(req.id); break;
+      case 'ping':    out = ping_(); break;
+      case 'upload':  out = uploadReceipt_(req.data, req.mime, req.name); break;
+      case 'process': out = processNow_(req.id); break;
+      case 'scan':    out = runScan_(); break;
+      case 'status':  out = receiptStatus_(req.id); break;
       default: throw new Error('Unknown action ' + req.action);
     }
     out.ok = true;
@@ -194,7 +195,8 @@ function ping_() {
   return { sheet: sheet, problems: problems };
 }
 
-// Saves one scanned receipt (JPEG, or a PDF of several sections) into the inbox.
+// Saves one scanned receipt (JPEG, or a PDF of several sections) into the inbox. Quick: the app
+// waits only for this, so the phone can be put away as soon as it answers.
 function uploadReceipt_(base64, mime, name) {
   if (['image/jpeg', 'application/pdf'].indexOf(mime) === -1) throw new Error('Unsupported file type ' + mime);
   const bytes = Utilities.base64Decode(String(base64 || ''));
@@ -208,6 +210,14 @@ function uploadReceipt_(base64, mime, name) {
   return { id: file.getId(), name: file.getName() };
 }
 
+// Reads one just-uploaded receipt right now and answers with the result. Runs alongside other
+// scans; if the phone stops waiting, it still finishes here, and the 10-minute timer is the backstop.
+function processNow_(fileId) {
+  const out = runScan_(String(fileId));
+  const mine = out.results.filter(r => r.id === String(fileId))[0];
+  return mine || receiptStatus_(fileId);
+}
+
 // Where a receipt has got to: still in the inbox, logged, or failed - with the reason.
 function receiptStatus_(fileId) {
   const props = PropertiesService.getScriptProperties();
@@ -218,80 +228,130 @@ function receiptStatus_(fileId) {
                : where === props.getProperty('folder_failed') ? 'failed'
                : where === props.getProperty('folder_inbox') ? 'waiting' : 'unknown';
   if (status === 'unknown') throw new Error('That file is not one of the scanner\'s receipts');
-  return { status: status, message: file.getDescription() || '' };
+  const message = file.getDescription() || '';
+  return { id: String(fileId), status: /^Duplicate/.test(message) ? 'duplicate' : status, message: message };
 }
 
 // ------------------------------------------------------------------ main loop
 // The 10-minute trigger calls this with an event object, which is ignored.
-function scanInbox() { runScan_(5000); }
+function scanInbox() { runScan_(); }
 
-function runScan_(waitMs) {
+const CLAIM_MS = 7 * 60 * 1000;   // longer than Apps Script's 6-minute limit, so a claim outlives its run
+
+// Reads receipts in the inbox (or just one, when the app asks). Several runs can work at once:
+// each claims its file first, and only the moment of writing to the sheet is done one at a time.
+function runScan_(onlyId) {
   const started = Date.now();
+  const env = env_();
+  const results = [];
+  let list = [];
+  if (onlyId) list = [DriveApp.getFileById(onlyId)];
+  else { const it = env.inbox.getFiles(); while (it.hasNext() && list.length < 50) list.push(it.next()); }
+  let n = 0;
+  for (let i = 0; i < list.length; i++) {
+    if (n >= MAX_PER_RUN || Date.now() - started > START_BUDGET_MS) break;
+    const file = list[i], fid = file.getId(), mime = file.getMimeType();
+    if (!/^image\//.test(mime) && mime !== 'application/pdf') continue;
+    if (onlyId && !inFolder_(file, env.props.getProperty('folder_inbox'))) continue;   // already done
+    if (!claim_(env.props, fid)) continue;                                            // another run has it
+    n++;
+    try { results.push(processFile_(file, env)); }
+    finally { unclaim_(env.props, fid); }
+  }
+  SpreadsheetApp.flush();
+  return { results: results };
+}
+
+function env_() {
+  const props = PropertiesService.getScriptProperties();
+  const key = props.getProperty('ANTHROPIC_API_KEY');
+  if (!key) throw new Error('No API key — Receipts menu > Set API key');
+  const ss = ss_();
+  return {
+    props: props, key: key, ss: ss, ws: ss.getSheetByName('Expenses'), tz: ss.getSpreadsheetTimeZone(),
+    cats: readCategories_(ss), fx: readFxCurrencies_(ss),
+    inbox: DriveApp.getFolderById(props.getProperty('folder_inbox')),
+    processed: DriveApp.getFolderById(props.getProperty('folder_processed')),
+    failed: DriveApp.getFolderById(props.getProperty('folder_failed'))
+  };
+}
+
+function inFolder_(file, folderId) {
+  const p = file.getParents();
+  while (p.hasNext()) if (p.next().getId() === folderId) return true;
+  return false;
+}
+
+function claim_(props, fid) {
   const lock = LockService.getScriptLock();
-  if (!lock.tryLock(waitMs)) return { busy: true };
+  lock.waitLock(20000);
   try {
-    const props = PropertiesService.getScriptProperties();
-    const key = props.getProperty('ANTHROPIC_API_KEY');
-    if (!key) throw new Error('No API key — Receipts menu > Set API key');
-    const inbox = DriveApp.getFolderById(props.getProperty('folder_inbox'));
-    const processed = DriveApp.getFolderById(props.getProperty('folder_processed'));
-    const failed = DriveApp.getFolderById(props.getProperty('folder_failed'));
-
-    const ss = ss_();
-    const ws = ss.getSheetByName('Expenses');
-    const cats = readCategories_(ss);
-    const fx = readFxCurrencies_(ss);
-    const seen = existingIds_(ws);
-
-    const files = inbox.getFiles();
-    let n = 0;
-    while (files.hasNext() && n < MAX_PER_RUN && Date.now() - started < START_BUDGET_MS) {
-      const file = files.next();
-      const mime = file.getMimeType();
-      if (!/^image\//.test(mime) && mime !== 'application/pdf') continue;
-      const fid = file.getId();
-      const rid = fingerprint_(file);   // same photo uploaded twice = same fingerprint
-      if (seen.has(rid)) {
-        file.setDescription('Duplicate - this receipt is already on the Expenses tab.');
-        file.moveTo(processed);
-        clearTries_(props, fid);
-        continue;
-      }
-      n++;
-      try {
-        const media = mediaBlock_(file);
-        if (!media) throw retryable_('Drive has not made a preview of this photo yet');
-        const data = callClaude_(key, media, cats);
-        const res = writeReceipt_(ws, data, rid, cats, fx);
-        const newName = Utilities.formatDate(res.date, ss.getSpreadsheetTimeZone(), 'yyyy-MM-dd') + '_' +
-                        safe_(data.merchant) + '_' + rid.slice(-6) + ext_(file.getName(), mime);
-        file.setName(newName);
-        ws.getRange(res.firstRow, COL.file, res.count, 1).setValue(newName);
-        file.setDescription(summary_(data, res));
-        file.moveTo(processed);
-        clearTries_(props, fid);
-        seen.add(rid);
-      } catch (e) {
-        let msg = e.message;
-        if (e.retryable) {
-          const tries = bumpTries_(props, fid);
-          if (tries < MAX_TRIES) {
-            // Stays in the inbox and is tried again next run.
-            file.setDescription('Will retry (' + tries + '/' + MAX_TRIES + '): ' + msg);
-            console.warn(file.getName() + ': ' + msg);
-            continue;
-          }
-          msg += ' (gave up after ' + tries + ' tries - move it back to Receipts Inbox to try again)';
-        }
-        file.setDescription('Scanner error: ' + msg);
-        file.moveTo(failed);
-        clearTries_(props, fid);
-        console.error(file.getName() + ': ' + msg);
-      }
-    }
-    SpreadsheetApp.flush();
+    const at = Number(props.getProperty('claim_' + fid) || 0);
+    if (Date.now() - at < CLAIM_MS) return false;
+    props.setProperty('claim_' + fid, String(Date.now()));
+    return true;
   } finally { lock.releaseLock(); }
-  return { busy: false };
+}
+function unclaim_(props, fid) { props.deleteProperty('claim_' + fid); }
+
+// One receipt, start to finish. Returns { id, status: logged|duplicate|waiting|failed, message }.
+function processFile_(file, env) {
+  const fid = file.getId(), mime = file.getMimeType(), props = env.props;
+  const rid = fingerprint_(file);   // same photo uploaded twice = same fingerprint
+  try {
+    if (existingIds_(env.ws).has(rid)) return skipDuplicate_(file, env, 'this exact photo is already logged');
+    const media = mediaBlock_(file);
+    if (!media) throw retryable_('Drive has not made a preview of this photo yet');
+    const data = callClaude_(env.key, media, env.cats);
+
+    // Writing is the only step done one at a time, so two scans can never take the same rows and
+    // the duplicate check sees everything written before it.
+    const lock = LockService.getScriptLock();
+    lock.waitLock(60000);
+    let res;
+    try {
+      const groups = receiptGroups_(env.ws, env.tz);
+      if (groups.some(g => g.rid === rid)) return skipDuplicate_(file, env, 'this exact photo is already logged');
+      const match = matchReceipt_(signature_(data), groups);
+      if (match && match.same) {
+        return skipDuplicate_(file, env, 'it is the same printed receipt as one logged on ' + match.group.dateKey +
+          ' (' + match.group.merchant + ', rows ' + match.group.rows[0] + '-' + match.group.rows[match.group.rows.length - 1] + ')');
+      }
+      res = writeReceipt_(env.ws, data, rid, env.cats, env.fx, file.getName(), mime, match);
+      SpreadsheetApp.flush();
+    } finally { lock.releaseLock(); }
+
+    file.setName(res.fileName);
+    const message = summary_(data, res, env.tz);
+    file.setDescription(message);
+    file.moveTo(env.processed);
+    clearTries_(props, fid);
+    return { id: fid, status: 'logged', message: message };
+  } catch (e) {
+    let msg = e.message;
+    if (e.retryable) {
+      const tries = bumpTries_(props, fid);
+      if (tries < MAX_TRIES) {
+        file.setDescription('Will retry (' + tries + '/' + MAX_TRIES + '): ' + msg);
+        console.warn(file.getName() + ': ' + msg);
+        return { id: fid, status: 'waiting', message: 'Will retry shortly: ' + msg };
+      }
+      msg += ' (gave up after ' + tries + ' tries - move it back to Receipts Inbox to try again)';
+    }
+    file.setDescription('Scanner error: ' + msg);
+    file.moveTo(env.failed);
+    clearTries_(props, fid);
+    console.error(file.getName() + ': ' + msg);
+    return { id: fid, status: 'failed', message: msg };
+  }
+}
+
+function skipDuplicate_(file, env, why) {
+  const message = 'Duplicate - not added again: ' + why + '.';
+  file.setDescription(message);
+  file.moveTo(env.processed);
+  clearTries_(env.props, file.getId());
+  return { id: file.getId(), status: 'duplicate', message: message };
 }
 
 function retryable_(msg) { const e = new Error(msg); e.retryable = true; return e; }
@@ -302,15 +362,93 @@ function bumpTries_(props, fid) {
 }
 function clearTries_(props, fid) { props.deleteProperty('tries_' + fid); }
 
-function summary_(data, res) {
+function summary_(data, res, tz) {
   const items = data.items || [];
   const sum = items.reduce((s, i) => s + Number(i.line_total || 0), 0);
   const parts = ['Logged ' + items.length + ' item' + (items.length === 1 ? '' : 's'),
                  String(data.merchant || 'unknown shop'),
                  sum.toFixed(2) + ' ' + res.currency,
-                 Utilities.formatDate(res.date, ss_().getSpreadsheetTimeZone(), 'd MMM yyyy')];
+                 Utilities.formatDate(res.date, tz, 'd MMM yyyy')];
   if (res.flag) parts.push('Check: ' + res.flag);
   return parts.join(' · ');
+}
+
+// ------------------------------------------------------------------ duplicate receipts
+// A receipt is "the same receipt" only when its printed identity matches: same day and same
+// receipt number, or same day, same printed time and same total. Same shop + day + total with
+// nothing else to compare is NOT treated as a duplicate (repeat purchases are normal) - it is
+// logged and flagged so it can be checked.
+function merchantKey_(s) {
+  return String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/ı/g, 'i')
+    .replace(/[^a-z0-9]+/g, ' ').trim().split(' ')[0] || '';
+}
+function receiptNo_(s) { const t = String(s || '').replace(/[^A-Za-z0-9]/g, '').replace(/^0+/, ''); return t || ''; }
+function receiptTime_(s) {
+  const m = String(s || '').match(/(\d{1,2})[:.](\d{2})/);
+  return m && +m[1] < 24 && +m[2] < 60 ? ('0' + (+m[1])).slice(-2) + ':' + m[2] : '';
+}
+function tagText_(no, time) { return [no ? 'No. ' + no : '', time].filter(String).join(' · '); }
+function parseTag_(t) {
+  const s = String(t || '');
+  const no = s.match(/No\.\s*([A-Za-z0-9]+)/);
+  return { no: no ? receiptNo_(no[1]) : '', time: receiptTime_(s.replace(/No\.\s*[A-Za-z0-9]+/, '')) };
+}
+function dayKey_(v, tz) {
+  if (v instanceof Date) return Utilities.formatDate(v, tz, 'yyyy-MM-dd');
+  if (typeof v === 'number' && v > 0) return new Date(Math.round((v - 25569) * 86400000)).toISOString().slice(0, 10);
+  return '';
+}
+function ymd_(d) { return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2); }
+
+// Every receipt already on the Expenses tab, grouped by Receipt ID.
+function receiptGroups_(ws, tz) {
+  const last = ws.getLastRow();
+  if (last < 2) return [];
+  const vals = ws.getRange(2, 1, last - 1, COL.tag).getValues();
+  const by = {}, order = [];
+  vals.forEach((v, i) => {
+    if (String(v[COL.item - 1]).trim() === '' || !v[COL.id - 1]) return;
+    const rid = String(v[COL.id - 1]);
+    let g = by[rid];
+    if (!g) {
+      const tag = parseTag_(v[COL.tag - 1]);
+      g = by[rid] = { rid: rid, rows: [], total: 0, dateKey: dayKey_(v[COL.date - 1], tz), merchant: String(v[COL.merchant - 1]),
+                      mkey: merchantKey_(v[COL.merchant - 1]), no: tag.no, time: tag.time };
+      order.push(g);
+    }
+    g.rows.push(i + 2);
+    g.total += Number(v[COL.line - 1]) || 0;
+  });
+  return order;
+}
+
+// What identifies a newly read receipt, computed the same way as the sheet computes its rows.
+function signature_(data) {
+  const flags = [];
+  const d = resolveDate_(data, flags);
+  const total = (data.items || []).reduce((s, it) => {
+    const q = Math.round(Number(it.quantity || 1) * 1000) / 1000;
+    const u = Math.round((it.unit_price != null ? Number(it.unit_price) : Number(it.line_total || 0)) * 100) / 100;
+    return s + q * u;
+  }, 0);
+  return { dateKey: d ? ymd_(d) : '', total: total, mkey: merchantKey_(data.merchant),
+           no: receiptNo_(data.receipt_number), time: receiptTime_(data.receipt_time) };
+}
+
+// { same: true, group } = the same printed receipt; { same: false, group } = possible duplicate; null = new.
+function matchReceipt_(sig, groups) {
+  if (!sig.dateKey) return null;
+  let possible = null;
+  for (let i = 0; i < groups.length; i++) {
+    const g = groups[i];
+    if (g.dateKey !== sig.dateKey) continue;
+    const shop = !!sig.mkey && g.mkey === sig.mkey;
+    const sameTotal = Math.abs(g.total - sig.total) <= Math.max(0.02, 0.002 * Math.abs(sig.total));
+    if (sig.no && g.no) { if (shop && sig.no === g.no) return { same: true, group: g }; continue; }
+    if (sig.time && g.time) { if (shop && sameTotal && sig.time === g.time) return { same: true, group: g }; continue; }
+    if (shop && sameTotal && !possible) possible = { same: false, group: g };
+  }
+  return possible;
 }
 
 // ------------------------------------------------------------------ image handling
@@ -432,6 +570,8 @@ function prompt_(cats) {
     '- Turkish numbers use comma decimals and dot thousands ("1.249,90" = 1249.90). Ignore "*" before prices.',
     '- currency: ISO code; TL or the lira symbol = TRY. Default TRY.',
     '- receipt_total: final amount paid (TOPLAM / GENEL TOPLAM / TOTAL).',
+    '- receipt_number: the receipt\'s own number (FİŞ NO, FIS NO, Belge No, Receipt #, Order #), digits as printed. null if none.',
+    '- receipt_time: the time printed on the receipt (SAAT), as HH:MM 24-hour. null if none.',
     '- payment_method: "Card" (KREDI KARTI, BANKA KARTI, temassiz), "Cash" (NAKIT), or null.',
     '- category: best fit from: ' + cats.join(', '),
     ' supermarket food -> Groceries; restaurants/delivery -> Eating Out; cafe drinks, bakery, vending -> Coffee & Snacks;',
@@ -447,11 +587,14 @@ function toolSchema_(cats) {
     name: 'record_receipt', description: 'Record the structured contents of one receipt.',
     strict: true,
     input_schema: { type: 'object', additionalProperties: false,
-      required: ['merchant', 'date', 'date_printed', 'currency', 'payment_method', 'items', 'receipt_total', 'confidence', 'notes'],
+      required: ['merchant', 'date', 'date_printed', 'receipt_number', 'receipt_time', 'currency', 'payment_method', 'items',
+                 'receipt_total', 'confidence', 'notes'],
       properties: {
         merchant: { type: 'string' },
         date: { type: ['string', 'null'], description: 'YYYY-MM-DD, converted day-first from the printed date' },
         date_printed: { type: ['string', 'null'], description: 'the date exactly as printed on the receipt' },
+        receipt_number: { type: ['string', 'null'], description: 'FIS NO / receipt number as printed' },
+        receipt_time: { type: ['string', 'null'], description: 'time printed on the receipt, HH:MM' },
         currency: { type: 'string' },
         payment_method: { type: ['string', 'null'] }, receipt_total: { type: ['number', 'null'] },
         confidence: { type: 'string', enum: ['high', 'medium', 'low'] }, notes: { type: ['string', 'null'] },
@@ -465,7 +608,8 @@ function toolSchema_(cats) {
 }
 
 // ------------------------------------------------------------------ sheet writing
-function writeReceipt_(ws, data, rid, cats, fx) {
+// All of a receipt's rows go in with a handful of range writes, however many items it has.
+function writeReceipt_(ws, data, rid, cats, fx, oldName, mime, possibleDup) {
   const items = data.items || [];
   if (!items.length) throw new Error('No items (' + (data.notes || 'not a receipt?') + ')');
   const flags = [];
@@ -479,32 +623,33 @@ function writeReceipt_(ws, data, rid, cats, fx) {
   const cur0 = String(data.currency || DEFAULT_CURRENCY).toUpperCase().trim();
   const cur = (cur0 === 'TL' ? 'TRY' : cur0);
   if (fx && fx.length && fx.indexOf(cur) === -1) flags.push('NO FX RATE FOR ' + cur);
+  if (possibleDup) {
+    const g = possibleDup.group;
+    flags.push('POSSIBLE DUPLICATE of rows ' + g.rows[0] + '-' + g.rows[g.rows.length - 1] +
+               ' (same shop, date and total) - delete these rows if it is the same receipt');
+  }
   if (data.notes && flags.length) flags.push(String(data.notes).slice(0, 120));
   const flag = flags.join(' | ');
   const serial = dateSerial_(date);
+  const fileName = ymd_(date) + '_' + safe_(data.merchant) + '_' + rid.slice(-6) + ext_(oldName || '', mime);
+  const tag = tagText_(receiptNo_(data.receipt_number), receiptTime_(data.receipt_time));
 
-  const first = nextEmptyRow_(ws);
-  items.forEach((it, k) => {
-    const r = first + k;
+  const first = nextEmptyRow_(ws), n = items.length;
+  ws.getRange(first, COL.date, n, 7).setValues(items.map(it => {
     const qty = Number(it.quantity || 1);
     const unit = it.unit_price != null ? Number(it.unit_price) : Number(it.line_total || 0);
-    ws.getRange(r, COL.date, 1, 7).setValues([[serial, data.merchant || '', it.description_en || '',
-      it.original_text || '', cats.indexOf(it.category) > -1 ? it.category : 'Other',
-      Math.round(qty * 1000) / 1000, Math.round(unit * 100) / 100]]);
-    ws.getRange(r, COL.currency).setValue(cur);
-    ws.getRange(r, COL.payment, 1, 4).setValues([[data.payment_method || '', '', rid, flag]]);
-    ensureFormulas_(ws, r);
-  });
-  return { date: date, count: items.length, firstRow: first, currency: cur, flag: flag };
-}
-
-function ensureFormulas_(ws, r) {
-  const h = ws.getRange(r, COL.line);
-  if (!h.getFormula()) {
-    h.setFormula(lineFormula_(r));
-    ws.getRange(r, COL.aud).setFormula(audFormula_(r));
-  }
-  ws.getRange(r, COL.date).setNumberFormat('dd mmm yyyy');
+    return [serial, data.merchant || '', it.description_en || '', it.original_text || '',
+            cats.indexOf(it.category) > -1 ? it.category : 'Other',
+            Math.round(qty * 1000) / 1000, Math.round(unit * 100) / 100];
+  }));
+  ws.getRange(first, COL.line, n, 1).setFormulas(items.map((_, k) => [lineFormula_(first + k)]));
+  ws.getRange(first, COL.currency, n, 1).setValues(items.map(() => [cur]));
+  ws.getRange(first, COL.aud, n, 1).setFormulas(items.map((_, k) => [audFormula_(first + k)]));
+  ws.getRange(first, COL.payment, n, 5).setValues(items.map(() => [data.payment_method || '', fileName, rid, flag, tag]));
+  ws.getRange(first, COL.date, n, 1).setNumberFormat('dd mmm yyyy');
+  const head = ws.getRange(1, COL.tag);
+  if (!head.getValue()) head.setValue('Receipt No / Time');
+  return { date: date, count: n, firstRow: first, currency: cur, flag: flag, fileName: fileName };
 }
 
 function nextEmptyRow_(ws) {

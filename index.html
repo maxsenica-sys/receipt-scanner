@@ -58,6 +58,7 @@
   .row.ok .st { color: var(--accent); }
   .row.bad .st { color: var(--bad); }
   .row.wait .st { color: var(--warn); }
+  .row.dup .st { color: var(--muted); }
   .row button { flex: 0 0 auto; }
 
   #conn { display: flex; align-items: center; gap: 8px; padding: 8px 16px; font-size: 14px; background: var(--panel);
@@ -174,16 +175,60 @@ var Core = (function () {
     return true;
   }
 
-  // Finds a receipt: the largest bright, roughly four-sided region in the frame.
-  // Returns { quad: [TL, TR, BR, BL] in this image's pixels, area: fraction of frame } or null.
-  function detect(gray, w, h) {
-    var t = otsu(gray);
-    var i;
-    if (t < 70) return null;                         // nothing paper-bright in view
-    var bin = new Uint8Array(w * h);
-    for (i = 0; i < bin.length; i++) bin[i] = gray[i] > t ? 1 : 0;
+  // 1 where a pixel is close to neutral (white/grey paper), 0 where it is coloured (skin, wood, tiles).
+  function neutral(rgba, w, h) {
+    var m = new Uint8Array(w * h);
+    for (var i = 0, j = 0; i < m.length; i++, j += 4) {
+      var r = rgba[j], g = rgba[j + 1], b = rgba[j + 2], mx = r > g ? (r > b ? r : b) : (g > b ? g : b), mn = r < g ? (r < b ? r : b) : (g < b ? g : b);
+      m[i] = mx > 0 && (mx - mn) <= 0.24 * mx + 6 ? 1 : 0;
+    }
+    return m;
+  }
 
-    var label = new Int32Array(w * h), stack = new Int32Array(w * h), next = 1, best = null;
+  // Otsu over only the pixels brighter than `from`: splits "light table" from "paper".
+  function otsuAbove(g, from) {
+    var hist = new Array(256).fill(0), n = 0, sum = 0, i;
+    for (i = 0; i < g.length; i++) if (g[i] > from) { hist[g[i]]++; n++; }
+    if (n < 50) return -1;
+    for (i = 0; i < 256; i++) sum += i * hist[i];
+    var sumB = 0, wB = 0, best = 0, t = -1;
+    for (i = from + 1; i < 256; i++) {
+      wB += hist[i]; if (!wB) continue;
+      var wF = n - wB; if (!wF) break;
+      sumB += i * hist[i];
+      var mB = sumB / wB, mF = (sum - sumB) / wF, v = wB * wF * (mB - mF) * (mB - mF);
+      if (v > best) { best = v; t = i; }
+    }
+    return t;
+  }
+
+  // 3x3 erosion / dilation. The frame border is left as it is, so a receipt running off the edge
+  // keeps its edge.
+  function erode(bin, w, h) {
+    var o = new Uint8Array(bin);
+    for (var y = 1; y < h - 1; y++) for (var x = 1; x < w - 1; x++) {
+      var i = y * w + x;
+      o[i] = bin[i] & bin[i - 1] & bin[i + 1] & bin[i - w] & bin[i + w] & bin[i - w - 1] & bin[i - w + 1] & bin[i + w - 1] & bin[i + w + 1];
+    }
+    return o;
+  }
+  function dilate(bin, w, h) {
+    var o = new Uint8Array(bin);
+    for (var y = 1; y < h - 1; y++) for (var x = 1; x < w - 1; x++) {
+      var i = y * w + x;
+      o[i] = bin[i] | bin[i - 1] | bin[i + 1] | bin[i - w] | bin[i + w] | bin[i - w - 1] | bin[i - w + 1] | bin[i + w - 1] | bin[i + w + 1];
+    }
+    return o;
+  }
+  // Fill the printed text in (close), then snap thin bridges to other bright things (open).
+  function cleanMask(bin, w, h) {
+    var m = erode(erode(dilate(dilate(bin, w, h), w, h), w, h), w, h);
+    return dilate(erode(m, w, h), w, h);
+  }
+
+  // The best receipt-shaped region in one bright/dark split, or null.
+  function bestRegion(bin, w, h) {
+    var label = new Int32Array(w * h), stack = new Int32Array(w * h), next = 1, best = null, frame = w * h;
     for (var s = 0; s < bin.length; s++) {
       if (!bin[s] || label[s]) continue;
       var top = 0, size = 0, id = next++;
@@ -204,22 +249,40 @@ var Core = (function () {
         if (y > 0 && bin[p - w] && !label[p - w]) { label[p - w] = id; stack[top++] = p - w; }
         if (y < h - 1 && bin[p + w] && !label[p + w]) { label[p + w] = id; stack[top++] = p + w; }
       }
-      if (!best || size > best.size) best = { size: size, quad: [tl, tr, br, bl], box: [minX, minY, maxX, maxY] };
+      if (size < 0.05 * frame) continue;
+      var q = [tl, tr, br, bl], bw = maxX - minX + 1, bh = maxY - minY + 1;
+      if (bw > 0.97 * w && bh > 0.97 * h) continue;              // the whole view: background, not paper
+      if (!isConvex(q)) continue;
+      var qa = polyArea(q);
+      if (qa < 0.05 * frame) continue;
+      var fill = size / qa;
+      if (fill < 0.75) continue;                                  // patchy (wood grain, texture), not a sheet of paper
+      var shortSide = Infinity;
+      for (var k = 0; k < 4; k++) shortSide = Math.min(shortSide, Math.hypot(q[k][0] - q[(k + 1) % 4][0], q[k][1] - q[(k + 1) % 4][1]));
+      if (shortSide < 0.08 * Math.min(w, h)) continue;
+      var score = Math.min(fill, 1) * Math.sqrt(qa / frame);
+      if (!best || score > best.score) best = { quad: q, area: qa / frame, score: score, fill: fill };
     }
-    if (!best) return null;
-    var frame = w * h, q = best.quad;
-    var bw = best.box[2] - best.box[0] + 1, bh = best.box[3] - best.box[1] + 1;
-    if (best.size < 0.06 * frame) return null;                // too small / too far away
-    if (bw > 0.97 * w && bh > 0.97 * h) return null;          // bright background, not a receipt
-    if (!isConvex(q)) return null;
-    var qa = polyArea(q);
-    if (qa < 0.06 * frame) return null;
-    if (best.size / qa < 0.55) return null;                   // a blob, not a sheet of paper
-    for (i = 0; i < 4; i++) {                                  // no two corners on top of each other
-      var a = q[i], b = q[(i + 1) % 4];
-      if (Math.hypot(a[0] - b[0], a[1] - b[1]) < 0.08 * Math.min(w, h)) return null;
+    return best;
+  }
+
+  // Finds a receipt: the most paper-like (bright, neutral, four-sided) region in the frame.
+  // Tries the plain bright/dark split and a finer one, so pale paper on a light table still separates.
+  // Returns { quad: [TL, TR, BR, BL] in this image's pixels, area: fraction of frame } or null.
+  function detect(gray, w, h, neutralMask) {
+    var t1 = otsu(gray), t2 = otsuAbove(gray, t1), ts = [t1];
+    if (t2 > t1 + 8) ts.push(t2);
+    if (t1 + 25 < 250) ts.push(t1 + 25);
+    var best = null;
+    for (var c = 0; c < ts.length; c++) {
+      var t = ts[c];
+      if (t < 95) continue;                                        // nothing paper-bright in view
+      var bin = new Uint8Array(w * h);
+      for (var i = 0; i < bin.length; i++) bin[i] = gray[i] > t && (!neutralMask || neutralMask[i]) ? 1 : 0;
+      var r = bestRegion(cleanMask(bin, w, h), w, h);
+      if (r && (!best || r.score > best.score)) best = r;
     }
-    return { quad: q, area: qa / frame };
+    return best ? { quad: best.quad, area: best.area } : null;
   }
 
   // Grows a quad outward from its centre so the crop keeps the paper's edge.
@@ -351,33 +414,45 @@ var Core = (function () {
     return outArr;
   }
 
-  // Auto-capture: fires once the receipt has been found in the same place, with the picture
-  // still, for long enough. `rearm` stops the same receipt being captured twice in a row.
+  // Auto-capture: fires once the receipt has been found in about the same place for ~0.7 s.
+  // A handheld phone shakes a little: small corner movement and a dropped frame or two are fine.
+  // `armed` stops the same receipt being captured twice in a row.
+  var REARM_GONE = 8;
   function Tracker(opts) {
-    this.need = opts.need || 8;        // consecutive steady frames (~100 ms each)
-    this.maxShift = opts.maxShift;     // px in detection space
-    this.maxMotion = opts.maxMotion || 6;
-    this.history = [];
-    this.armed = true;
-    this.lastCaptureGray = null;
+    this.need = opts.need || 7;
+    this.maxShift = opts.maxShift;            // px in detection space between consecutive frames
+    this.w = opts.w; this.h = opts.h;
+    this.history = []; this.misses = 0; this.smooth = null;
+    this.armed = true; this.goneFor = 0;
   }
-  Tracker.prototype.update = function (det, gray, prevGray) {
-    var motion = Core.meanAbsDiff(gray, prevGray);
+  // After a capture it re-arms only once the receipt has left the view for ~0.8 s (the next receipt
+  // is coming), so holding still on the one just captured never captures it twice.
+  Tracker.prototype.update = function (det, gray) {
     if (!this.armed) {
-      if (!det || Core.meanAbsDiff(gray, this.lastCaptureGray) > 18) this.armed = true;
-      this.history = [];
-      return { progress: 0, fire: false, armed: false };
+      this.goneFor = det ? 0 : this.goneFor + 1;
+      if (this.goneFor >= REARM_GONE) this.armed = true;
+      this.history = []; this.smooth = null;
+      return { progress: 0, fire: false, armed: this.armed, quad: det && det.quad };
     }
-    if (!det || det.area < 0.08 || motion > this.maxMotion) { this.history = []; return { progress: 0, fire: false, armed: true }; }
+    if (!det || det.area < 0.08) {
+      if (++this.misses > 2) { this.history = []; this.smooth = null; }
+      return { progress: Math.min(1, this.history.length / this.need), fire: false, armed: true, quad: this.smooth };
+    }
+    this.misses = 0;
     var last = this.history[this.history.length - 1];
-    if (last && Core.maxCornerShift(last.quad, det.quad) > this.maxShift) this.history = [];
+    if (last && maxCornerShift(last.quad, det.quad) > this.maxShift) { this.history = []; this.smooth = null; }
     this.history.push(det);
+    // steadier outline: average of the recent detections
+    this.smooth = this.smooth ? this.smooth.map(function (p, i) { return [p[0] * 0.6 + det.quad[i][0] * 0.4, p[1] * 0.6 + det.quad[i][1] * 0.4]; })
+                              : det.quad.map(function (p) { return [p[0], p[1]]; });
     var progress = Math.min(1, this.history.length / this.need);
-    return { progress: progress, fire: progress >= 1, armed: true };
+    return { progress: progress, fire: progress >= 1, armed: true, quad: this.smooth };
   };
-  Tracker.prototype.captured = function (gray) { this.armed = false; this.lastCaptureGray = gray; this.history = []; };
+  Tracker.prototype.captured = function () {
+    this.armed = false; this.goneFor = 0; this.history = []; this.smooth = null;
+  };
 
-  return { toGray: toGray, otsu: otsu, detect: detect, expand: expand, maxCornerShift: maxCornerShift,
+  return { toGray: toGray, otsu: otsu, detect: detect, neutral: neutral, expand: expand, maxCornerShift: maxCornerShift,
            meanAbsDiff: meanAbsDiff, homography: homography, outputSize: outputSize, warp: warp,
            pageSlices: pageSlices, buildPdf: buildPdf, polyArea: polyArea, Tracker: Tracker };
 })();
@@ -528,13 +603,15 @@ if (typeof module !== 'undefined') module.exports = Core;
       var sw = DET_W, sh = Math.round(vh * DET_W / vw);
       if (small.width !== sw || small.height !== sh) { small.width = sw; small.height = sh; }
       ctxS.drawImage(video, 0, 0, sw, sh);
-      var gray = Core.toGray(ctxS.getImageData(0, 0, sw, sh).data, sw, sh);
-      var det = Core.detect(gray, sw, sh);
-      if (!tracker) tracker = new Core.Tracker({ need: 8, maxShift: 0.03 * sw, maxMotion: 6 });
-      var r = tracker.update(det, gray, prevGray);
-      prevGray = gray; lastDet = det;
-      drawLive(det, sw, sh, r);
-      if (r.fire) { tracker.captured(gray); capture(det, sw); return; }
+      var px = ctxS.getImageData(0, 0, sw, sh).data, gray = Core.toGray(px, sw, sh);
+      var det = Core.detect(gray, sw, sh, Core.neutral(px, sw, sh));
+      if (!tracker || tracker.w !== sw || tracker.h !== sh) tracker = new Core.Tracker({ need: 7, maxShift: 0.045 * sw, w: sw, h: sh });
+      var r = tracker.update(det, gray);
+      var shown = r.quad ? { quad: r.quad, area: det ? det.area : 0.1 } : null;   // steadied outline
+      prevGray = gray; lastDet = shown;
+      drawLive(shown, sw, sh, r);
+      var manualPart = longMode && sections.length > 0;   // long receipt: later parts on the shutter
+      if (r.fire && !manualPart) { tracker.captured(); capture(shown, sw); return; }
     }
     loopTimer = setTimeout(loop, 90);
   }
@@ -571,7 +648,12 @@ if (typeof module !== 'undefined') module.exports = Core;
     var m = fitMap(sw, sh);
     var ring = $('ring');
     ring.setAttribute('stroke-dashoffset', String(232.5 * (1 - r.progress)));
-    if (!r.armed) { setHint(longMode ? 'Move down to the next part of the receipt' : 'Next receipt'); return; }
+    if (longMode && sections.length) {
+      if (det) drawQuad(det.quad, m, '#3ddc84', 'rgba(61,220,132,.12)');
+      setHint('Move down so the last lines you captured are at the top, then tap the button');
+      return;
+    }
+    if (!r.armed) { setHint('Captured — take it away to scan the next one'); return; }
     if (!det) {
       // A guide box, like a page scanner, until a receipt is found.
       var gw = sw * 0.62, gh = sh * 0.8, gx = (sw - gw) / 2, gy = (sh - gh) / 2;
@@ -579,7 +661,7 @@ if (typeof module !== 'undefined') module.exports = Core;
       drawQuad([[gx, gy], [gx + gw, gy], [gx + gw, gy + gh], [gx, gy + gh]], m, 'rgba(255,255,255,.55)');
       ctxO.setLineDash([]);
       setHint(longMode && sections.length ? 'Show the next part, overlapping the last one a little'
-                                          : 'Fit the receipt in the box — a dark surface helps');
+                                          : 'Fit the receipt in the box');
       return;
     }
     var green = r.progress > 0;
@@ -625,7 +707,8 @@ if (typeof module !== 'undefined') module.exports = Core;
       var sw = DET_W, sh = Math.round(ch * DET_W / cw);
       small.width = sw; small.height = sh;
       ctxS.drawImage(c, 0, 0, sw, sh);
-      var det = Core.detect(Core.toGray(ctxS.getImageData(0, 0, sw, sh).data, sw, sh), sw, sh);
+      var px = ctxS.getImageData(0, 0, sw, sh).data;
+      var det = Core.detect(Core.toGray(px, sw, sh), sw, sh, Core.neutral(px, sw, sh));
       var f = cw / sw;
       var quad = det ? Core.expand(det.quad.map(function (p) { return [p[0] * f, p[1] * f]; }), 0.025, cw, ch)
                      : [[0, 0], [cw - 1, 0], [cw - 1, ch - 1], [0, ch - 1]];
@@ -761,50 +844,116 @@ if (typeof module !== 'undefined') module.exports = Core;
   }
 
   // ---------------------------------------------------------------- upload + follow-up
-  function send(flats) {
-    var thumb = flats[0];
-    var row = addRow(thumb);
-    packageScan(flats).then(function (pkg) {
-      row.pkg = pkg;
-      upload(row);
-    }).catch(function (e) { setRow(row, 'bad', 'Could not prepare the scan: ' + e.message, true); });
+  // ---------------------------------------------------------------- outbox (survives closing the app)
+  // Every scan is stored on the phone first and removed only once the spreadsheet's script has it.
+  // Anything left over (app closed, no signal) is sent the next time the app opens.
+  var DB = null;
+  function db() {
+    if (DB) return DB;
+    DB = new Promise(function (res) {
+      try {
+        var rq = indexedDB.open('receiptScannerOutbox', 1);
+        rq.onupgradeneeded = function () { rq.result.createObjectStore('scans', { keyPath: 'qid' }); };
+        rq.onsuccess = function () { res(rq.result); };
+        rq.onerror = function () { res(null); };
+      } catch (e) { res(null); }
+    });
+    return DB;
+  }
+  function outbox(mode, arg) {
+    return db().then(function (d) {
+      if (!d) return mode === 'all' ? [] : null;
+      return new Promise(function (res) {
+        try {
+          var tx = d.transaction('scans', mode === 'all' ? 'readonly' : 'readwrite'), st = tx.objectStore('scans');
+          var rq = mode === 'put' ? st.put(arg) : mode === 'del' ? st.delete(arg) : st.getAll();
+          rq.onsuccess = function () { res(mode === 'all' ? rq.result || [] : true); };
+          rq.onerror = function () { res(mode === 'all' ? [] : null); };
+        } catch (e) { res(mode === 'all' ? [] : null); }
+      });
+    });
   }
 
-  function stamp() {
-    var d = new Date(), z = function (n) { return String(n).padStart(2, '0'); };
+  function send(flats) {
+    var created = Date.now();
+    var row = addRow(thumbOf(flats[0]), created);
+    packageScan(flats).then(function (pkg) {
+      var item = { qid: created + '-' + Math.random().toString(36).slice(2, 8), created: created, blob: pkg.blob,
+                   mime: pkg.mime, ext: pkg.ext, pages: pkg.pages, thumb: row.thumb };
+      row.item = item;
+      return outbox('put', item).then(function () { upload(row); });
+    }).catch(function (e) { setRow(row, 'bad', 'Could not prepare the scan: ' + e.message); });
+  }
+
+  function resumeOutbox() {
+    outbox('all').then(function (items) {
+      items.sort(function (x, y) { return x.created - y.created; }).forEach(function (item) {
+        if (document.querySelector('[data-qid="' + item.qid + '"]')) return;
+        var row = addRow(item.thumb, item.created);
+        row.item = item;
+        setRow(row, 'wait', 'Not sent yet — sending now…');
+        upload(row);
+      });
+    });
+  }
+
+  function stamp(t) {
+    var d = new Date(t || Date.now()), z = function (n) { return String(n).padStart(2, '0'); };
     return d.getFullYear() + '-' + z(d.getMonth() + 1) + '-' + z(d.getDate()) + '_' + z(d.getHours()) + z(d.getMinutes()) + z(d.getSeconds());
   }
 
   function upload(row) {
-    var pkg = row.pkg;
-    setRow(row, 'wait', 'Uploading' + (pkg.pages > 1 ? ' (' + pkg.pages + ' pages)' : '') + '…');
-    blobToBase64(pkg.blob).then(function (b64) {
-      return api('upload', { data: b64, mime: pkg.mime, name: 'scan_' + stamp() + '.' + pkg.ext }, 120000);
+    var item = row.item;
+    if (row.busy) return;
+    row.busy = true;
+    row.el.setAttribute('data-qid', item.qid);
+    setRow(row, 'wait', 'Sending' + (item.pages > 1 ? ' (' + item.pages + ' pages)' : '') + '…');
+    blobToBase64(item.blob).then(function (b64) {
+      return api('upload', { data: b64, mime: item.mime, name: 'scan_' + stamp(item.created) + '.' + item.ext }, 120000);
     }).then(function (res) {
       row.fileId = res.id;
-      setRow(row, 'wait', 'Uploaded — reading the receipt…');
-      // Reads it now instead of waiting for the 10-minute timer. Errors here are fine: status polling follows.
-      api('scan', {}, 240000).catch(function () {});
-      return null;
-    }).then(function () { return follow(row, 0); })
-      .catch(function (e) { setRow(row, 'bad', 'Upload failed: ' + e.message, true); });
+      outbox('del', item.qid);
+      setRow(row, 'wait', 'Saved to your Drive — reading it now. You can close the app.');
+      return readNow(row);
+    }, function (e) {
+      row.busy = false;
+      setRow(row, 'bad', 'Not sent yet (' + e.message + '). It is kept on this phone and will be sent automatically.', true);
+    });
   }
 
-  // Polls where the file has got to; the 10-minute timer is the backstop if this page is closed.
+  // Asks the script to read this receipt straight away and waits for the answer.
+  function readNow(row) {
+    return api('process', { id: row.fileId }, 400000).then(showResult.bind(null, row), function () {
+      return follow(row, 0);   // phone stopped waiting: the script carries on; check back on it
+    });
+  }
+
+  function showResult(row, s) {
+    if (s.status === 'logged') return setRow(row, /Check:/.test(s.message) ? 'wait' : 'ok', s.message);
+    if (s.status === 'duplicate') return setRow(row, 'dup', 'Already logged — not added again. ' + s.message.replace(/^Duplicate - not added again: /, ''));
+    if (s.status === 'failed') return setRow(row, 'bad', s.message);
+    setRow(row, 'wait', s.message || 'Reading the receipt…');
+    return new Promise(function (r) { setTimeout(r, 20000); }).then(function () { return follow(row, 0); });
+  }
+
+  // Fallback when the direct answer did not arrive: checks where the receipt has got to.
   function follow(row, n) {
     return api('status', { id: row.fileId }, 30000).then(function (s) {
-      if (s.status === 'logged') return setRow(row, /Check:/.test(s.message) ? 'wait' : 'ok', s.message);
-      if (s.status === 'failed') return setRow(row, 'bad', s.message);
-      if (n >= 40) return setRow(row, 'wait', 'Still in the inbox — it will be logged within 10 minutes.');
-      setRow(row, 'wait', s.message && /retry/i.test(s.message) ? s.message : 'Reading the receipt…');
-      return new Promise(function (r) { setTimeout(r, n < 6 ? 5000 : 15000); }).then(function () {
-        if (n === 8) api('scan', {}, 240000).catch(function () {});
-        return follow(row, n + 1);
-      });
-    }).catch(function () {
+      if (s.status !== 'waiting') return showResult(row, s);
+      if (n >= 30) return setRow(row, 'wait', 'Saved to your Drive. It will be read within 10 minutes, app open or not.');
+      setRow(row, 'wait', /retry/i.test(s.message) ? s.message : 'Saved to your Drive — still reading…');
+      return new Promise(function (r) { setTimeout(r, 10000); }).then(function () { return follow(row, n + 1); });
+    }, function () {
       return new Promise(function (r) { setTimeout(r, 15000); }).then(function () { return follow(row, n + 1); });
     });
   }
+
+  // Retry anything not yet sent whenever the connection comes back, and every 30 seconds.
+  function retryUnsent() {
+    rows.forEach(function (row) { if (row.item && !row.fileId && !row.busy) upload(row); });
+  }
+  window.addEventListener('online', retryUnsent);
+  setInterval(retryUnsent, 30000);
 
   function blobToBase64(blob) {
     return new Promise(function (res, rej) {
@@ -815,33 +964,41 @@ if (typeof module !== 'undefined') module.exports = Core;
     });
   }
 
-  function addRow(canvas) {
-    var row = document.createElement('div');
-    row.className = 'row wait';
-    var img = document.createElement('img');
+  var rows = [];
+  function thumbOf(canvas) {
     var t = document.createElement('canvas'), k = 80 / canvas.width;
     t.width = 80; t.height = Math.max(1, Math.round(canvas.height * k));
     t.getContext('2d').drawImage(canvas, 0, 0, t.width, t.height);
-    img.src = t.toDataURL('image/jpeg', 0.7);
+    return t.toDataURL('image/jpeg', 0.7);
+  }
+  function addRow(thumb, created) {
+    var row = document.createElement('div');
+    row.className = 'row wait';
+    var img = document.createElement('img');
+    img.src = thumb;
     var txt = document.createElement('div'); txt.className = 'txt';
-    var title = document.createElement('div'); title.textContent = 'Receipt ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    var title = document.createElement('div');
+    title.textContent = 'Receipt ' + new Date(created).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     var st = document.createElement('div'); st.className = 'st';
     txt.appendChild(title); txt.appendChild(st);
     row.appendChild(img); row.appendChild(txt);
     $('log').prepend(row);
-    return { el: row, st: st, retry: null };
+    var r = { el: row, st: st, retry: null, thumb: thumb };
+    rows.push(r);
+    return r;
   }
 
   function setRow(row, kind, msg, canRetry) {
     row.el.className = 'row ' + kind;
     row.st.textContent = msg;
     if (row.retry) { row.retry.remove(); row.retry = null; }
-    if (canRetry && row.pkg) {
-      var b = document.createElement('button'); b.className = 'btn'; b.textContent = 'Retry';
+    if (canRetry && row.item) {
+      var b = document.createElement('button'); b.className = 'btn'; b.textContent = 'Send now';
       b.onclick = function () { upload(row); };
       row.el.appendChild(b); row.retry = b;
     }
   }
+
 
   // ---------------------------------------------------------------- navigation
   function stopLoop() { clearTimeout(loopTimer); }
@@ -862,7 +1019,7 @@ if (typeof module !== 'undefined') module.exports = Core;
   $('shutter').onclick = function () {
     if (state !== 'live') return;
     stopLoop();
-    if (tracker && prevGray) tracker.captured(prevGray);
+    if (tracker) tracker.captured();
     capture(lastDet, small.width);
   };
   $('useBtn').onclick = useShot;
@@ -895,7 +1052,7 @@ if (typeof module !== 'undefined') module.exports = Core;
     if (!document.hidden && state === 'live') loop();
   });
 
-  checkConnection();
+  checkConnection().then(resumeOutbox);
   startCamera();
 })();
 </script>
