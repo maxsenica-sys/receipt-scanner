@@ -171,6 +171,8 @@ function doPost(e) {
       case 'process': out = processNow_(req.id); break;
       case 'scan':    out = runScan_(); break;
       case 'status':  out = receiptStatus_(req.id); break;
+      case 'decide':  out = decide_(req.id, !!req.add); break;
+      case 'held':    out = { held: heldList_() }; break;
       default: throw new Error('Unknown action ' + req.action);
     }
     out.ok = true;
@@ -212,8 +214,8 @@ function uploadReceipt_(base64, mime, name) {
 
 // Reads one just-uploaded receipt right now and answers with the result. Runs alongside other
 // scans; if the phone stops waiting, it still finishes here, and the 10-minute timer is the backstop.
-function processNow_(fileId) {
-  const out = runScan_(String(fileId));
+function processNow_(fileId, opts) {
+  const out = runScan_(String(fileId), opts);
   const mine = out.results.filter(r => r.id === String(fileId))[0];
   return mine || receiptStatus_(fileId);
 }
@@ -229,7 +231,41 @@ function receiptStatus_(fileId) {
                : where === props.getProperty('folder_inbox') ? 'waiting' : 'unknown';
   if (status === 'unknown') throw new Error('That file is not one of the scanner\'s receipts');
   const message = file.getDescription() || '';
-  return { id: String(fileId), status: /^Duplicate/.test(message) ? 'duplicate' : status, message: message };
+  if (status === 'waiting' && props.getProperty('held_' + fileId)) return heldInfo_(String(fileId), file);
+  return { id: String(fileId), status: /^Duplicate|^Not added/.test(message) ? 'duplicate' : status, message: message };
+}
+
+// ------------------------------------------------------------------ "is this a duplicate?" questions
+// A receipt that looks like one already logged (same shop, day and total, nothing printed to tell
+// them apart) is not written. It waits in the inbox until the app's owner says "add" or "don't add".
+// Unanswered, it is never added.
+function heldInfo_(fid, file) {
+  const props = PropertiesService.getScriptProperties();
+  const h = JSON.parse(props.getProperty('held_' + fid) || '{}');
+  return { id: fid, status: 'confirm', message: (file || DriveApp.getFileById(fid)).getDescription() || '', match: h.match || null };
+}
+
+function heldList_() {
+  const props = PropertiesService.getScriptProperties();
+  const all = props.getProperties(), out = [];
+  Object.keys(all).forEach(k => {
+    if (k.indexOf('held_') !== 0) return;
+    const fid = k.slice(5);
+    try { out.push(heldInfo_(fid)); } catch (e) { props.deleteProperty(k); }   // file gone: forget it
+  });
+  return out;
+}
+
+function decide_(fileId, add) {
+  const props = PropertiesService.getScriptProperties(), fid = String(fileId);
+  if (!props.getProperty('held_' + fid)) return receiptStatus_(fid);           // already decided
+  if (add) return processNow_(fid, { force: true });
+  const env = env_(), file = DriveApp.getFileById(fid);
+  props.deleteProperty('held_' + fid);
+  const message = 'Not added - you confirmed it was already logged.';
+  file.setDescription(message);
+  file.moveTo(env.processed);
+  return { id: fid, status: 'duplicate', message: message };
 }
 
 // ------------------------------------------------------------------ main loop
@@ -240,7 +276,7 @@ const CLAIM_MS = 7 * 60 * 1000;   // longer than Apps Script's 6-minute limit, s
 
 // Reads receipts in the inbox (or just one, when the app asks). Several runs can work at once:
 // each claims its file first, and only the moment of writing to the sheet is done one at a time.
-function runScan_(onlyId) {
+function runScan_(onlyId, opts) {
   const started = Date.now();
   const env = env_();
   const results = [];
@@ -253,9 +289,10 @@ function runScan_(onlyId) {
     const file = list[i], fid = file.getId(), mime = file.getMimeType();
     if (!/^image\//.test(mime) && mime !== 'application/pdf') continue;
     if (onlyId && !inFolder_(file, env.props.getProperty('folder_inbox'))) continue;   // already done
+    if (!onlyId && env.props.getProperty('held_' + fid)) continue;                   // waiting for an answer
     if (!claim_(env.props, fid)) continue;                                            // another run has it
     n++;
-    try { results.push(processFile_(file, env)); }
+    try { results.push(processFile_(file, env, opts || {})); }
     finally { unclaim_(env.props, fid); }
   }
   SpreadsheetApp.flush();
@@ -295,14 +332,19 @@ function claim_(props, fid) {
 function unclaim_(props, fid) { props.deleteProperty('claim_' + fid); }
 
 // One receipt, start to finish. Returns { id, status: logged|duplicate|waiting|failed, message }.
-function processFile_(file, env) {
+function processFile_(file, env, opts) {
   const fid = file.getId(), mime = file.getMimeType(), props = env.props;
   const rid = fingerprint_(file);   // same photo uploaded twice = same fingerprint
   try {
     if (existingIds_(env.ws).has(rid)) return skipDuplicate_(file, env, 'this exact photo is already logged');
-    const media = mediaBlock_(file);
-    if (!media) throw retryable_('Drive has not made a preview of this photo yet');
-    const data = callClaude_(env.key, media, env.cats);
+    // a held receipt was already read: reuse that reading instead of paying for it twice
+    const held = JSON.parse(props.getProperty('held_' + fid) || 'null');
+    let data = held && held.data;
+    if (!data) {
+      const media = mediaBlock_(file);
+      if (!media) throw retryable_('Drive has not made a preview of this photo yet');
+      data = callClaude_(env.key, media, env.cats);
+    }
 
     // Writing is the only step done one at a time, so two scans can never take the same rows and
     // the duplicate check sees everything written before it.
@@ -317,9 +359,23 @@ function processFile_(file, env) {
         return skipDuplicate_(file, env, 'it is the same printed receipt as one logged on ' + match.group.dateKey +
           ' (' + match.group.merchant + ', rows ' + match.group.rows[0] + '-' + match.group.rows[match.group.rows.length - 1] + ')');
       }
-      res = writeReceipt_(env.ws, data, rid, env.cats, env.fx, file.getName(), mime, match);
+      if (match && !opts.force) {
+        // looks like one already logged, with nothing printed to tell them apart: ask, don't write
+        const g = match.group, info = { rows: g.rows[0] + '-' + g.rows[g.rows.length - 1], merchant: g.merchant, date: g.dateKey,
+                                        total: Math.round(g.total * 100) / 100 };
+        const keep = { match: info };
+        const withData = JSON.stringify({ match: info, data: data });
+        props.setProperty('held_' + fid, withData.length < 8500 ? withData : JSON.stringify(keep));
+        const message = 'Already logged? Same shop, day and total as ' + g.merchant + ' on ' + g.dateKey +
+                        ' (rows ' + info.rows + ', ' + info.total.toFixed(2) + '). Not added unless you say so.';
+        file.setDescription(message);
+        clearTries_(props, fid);
+        return { id: fid, status: 'confirm', message: message, match: info };
+      }
+      res = writeReceipt_(env.ws, data, rid, env.cats, env.fx, file.getName(), mime);
       SpreadsheetApp.flush();
     } finally { lock.releaseLock(); }
+    props.deleteProperty('held_' + fid);
 
     file.setName(res.fileName);
     const message = summary_(data, res, env.tz);
@@ -374,10 +430,10 @@ function summary_(data, res, tz) {
 }
 
 // ------------------------------------------------------------------ duplicate receipts
-// A receipt is "the same receipt" only when its printed identity matches: same day and same
-// receipt number, or same day, same printed time and same total. Same shop + day + total with
-// nothing else to compare is NOT treated as a duplicate (repeat purchases are normal) - it is
-// logged and flagged so it can be checked.
+// A receipt is "the same receipt" when its printed identity matches: same day and same receipt
+// number, or same day, same printed time and same total - those are skipped. Same shop + day +
+// total with nothing printed to tell them apart is held and the app asks before adding it.
+// A different day is always a different purchase.
 function merchantKey_(s) {
   return String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/ı/g, 'i')
     .replace(/[^a-z0-9]+/g, ' ').trim().split(' ')[0] || '';
@@ -609,7 +665,7 @@ function toolSchema_(cats) {
 
 // ------------------------------------------------------------------ sheet writing
 // All of a receipt's rows go in with a handful of range writes, however many items it has.
-function writeReceipt_(ws, data, rid, cats, fx, oldName, mime, possibleDup) {
+function writeReceipt_(ws, data, rid, cats, fx, oldName, mime) {
   const items = data.items || [];
   if (!items.length) throw new Error('No items (' + (data.notes || 'not a receipt?') + ')');
   const flags = [];
@@ -623,11 +679,6 @@ function writeReceipt_(ws, data, rid, cats, fx, oldName, mime, possibleDup) {
   const cur0 = String(data.currency || DEFAULT_CURRENCY).toUpperCase().trim();
   const cur = (cur0 === 'TL' ? 'TRY' : cur0);
   if (fx && fx.length && fx.indexOf(cur) === -1) flags.push('NO FX RATE FOR ' + cur);
-  if (possibleDup) {
-    const g = possibleDup.group;
-    flags.push('POSSIBLE DUPLICATE of rows ' + g.rows[0] + '-' + g.rows[g.rows.length - 1] +
-               ' (same shop, date and total) - delete these rows if it is the same receipt');
-  }
   if (data.notes && flags.length) flags.push(String(data.notes).slice(0, 120));
   const flag = flags.join(' | ');
   const serial = dateSerial_(date);

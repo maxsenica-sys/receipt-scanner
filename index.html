@@ -23,9 +23,10 @@
   [hidden] { display: none !important; }
 
   #app { display: flex; flex-direction: column; height: 100%; }
-  header { display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px;
     padding: calc(env(safe-area-inset-top) + 8px) 16px 8px; }
-  header h1 { font-size: 17px; margin: 0; font-weight: 600; }
+  header h1 { font-size: 17px; margin: 0; font-weight: 600; white-space: nowrap; }
+  header .chip { white-space: nowrap; }
   .chip { background: var(--panel); border: 1px solid var(--line); border-radius: 22px; padding: 0 14px; font-size: 14px; }
   .chip.on { background: var(--accent); color: #062b16; border-color: var(--accent); font-weight: 600; }
 
@@ -74,6 +75,13 @@
   #setup p { color: var(--muted); }
   #setup input { width: 100%; min-width: 0; font: 15px monospace; padding: 12px; border-radius: 10px; border: 1px solid var(--line);
     background: var(--panel); color: var(--text); margin: 4px 0 14px; }
+  #confirm { position: absolute; inset: 0; background: #000; display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 12px 16px 16px; }
+  #confirm .q { font-size: 17px; font-weight: 600; text-align: center; }
+  #confirm img { flex: 1 1 auto; min-height: 0; max-width: 100%; object-fit: contain; background: #fff; border-radius: 4px; }
+  .row .q { color: var(--text); font-size: 14px; margin-top: 4px; }
+  .row[data-ask] { flex-wrap: wrap; }
+  .row[data-ask] .txt { flex: 1 1 calc(100% - 60px); }
+  .row[data-ask] button { flex: 1 1 40%; }
   #fallback { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
     gap: 14px; padding: 24px; text-align: center; color: var(--muted); }
   #fallback .btn { min-width: 220px; }
@@ -91,7 +99,10 @@
   </div>
   <header>
     <h1>Receipt Scanner</h1>
-    <button id="longBtn" class="chip" aria-pressed="false">Long receipt</button>
+    <div style="display:flex;gap:8px;align-items:center;min-width:0">
+      <button id="steadyBtn" class="chip on" hidden title="Steady mode is on. Tap to go back to normal speed">Steady ✕</button>
+      <button id="longBtn" class="chip" aria-pressed="false">Long receipt</button>
+    </div>
   </header>
   <div id="conn"><span class="dot"></span><span class="msg">Connecting to your spreadsheet…</span><button id="connRetry" class="btn" hidden>Retry</button></div>
 
@@ -102,6 +113,10 @@
     <div id="hint"><span>Starting camera…</span></div>
     <div id="sections" hidden></div>
     <div id="countdown" hidden></div>
+    <div id="confirm" hidden>
+      <div class="q">Is this receipt clear and fully in the picture?</div>
+      <img id="confirmImg" alt="Captured receipt">
+    </div>
     <div id="fallback" hidden>
       <div id="fallbackMsg">The live camera isn't available here.</div>
       <label class="btn primary" style="display:flex;align-items:center;justify-content:center">
@@ -120,6 +135,12 @@
         stroke-dasharray="232.5" stroke-dashoffset="232.5"/></svg>
     </button>
     <div class="side right"><button id="finishBtn" class="btn primary" hidden>Done</button></div>
+  </div>
+
+  <div class="controls" id="confirmControls" hidden>
+    <div class="side"><button id="noBtn" class="btn">No, retake</button></div>
+    <button id="adjustBtn" class="btn">Adjust</button>
+    <div class="side right"><button id="yesBtn" class="btn primary">Yes, send</button></div>
   </div>
 
   <div class="controls" id="reviewControls" hidden>
@@ -619,7 +640,13 @@ if (typeof module !== 'undefined') module.exports = Core;
   var MAX_SRC = 3000;            // longest side of the photo kept for cropping
   var OUT_W = 1400;              // width of the flattened receipt
   var AUTO_SEND_S = 3;           // seconds to look at a hand-adjusted crop before it sends itself
-  var UNDO_MS = 2000;            // an auto-captured scan waits this long (Undo / Adjust) before sending
+  // How long a receipt must be held steady before the photo is taken. Each "No, retake" moves one
+  // level up for the rest of this session (it resets whenever the app is opened again): a longer,
+  // stiller hold gives a sharper photo when something is making it hard.
+  var STEADY = [{ need: 5, shift: 0.045 }, { need: 10, shift: 0.035 }, { need: 16, shift: 0.028 }, { need: 24, shift: 0.022 }];
+  var steadyLevel = 0;
+  var TIPS = ['Fill more of the screen with the receipt', 'Lay it flat on something darker than the paper',
+              'Avoid shadows and glare from lights', 'Hold the phone directly above the receipt'];
 
   // ---------------------------------------------------------------- connection settings
   // The link from the spreadsheet carries them after the # (never sent to any web server):
@@ -756,7 +783,7 @@ if (typeof module !== 'undefined') module.exports = Core;
       ctxS.drawImage(video, 0, 0, sw, sh);
       var px = ctxS.getImageData(0, 0, sw, sh).data, gray = Core.toGray(px, sw, sh);
       var det = Core.detect(gray, sw, sh, Core.neutral(px, sw, sh));
-      if (!tracker || tracker.w !== sw || tracker.h !== sh) tracker = new Core.Tracker({ need: 5, maxShift: 0.045 * sw, w: sw, h: sh });
+      if (!tracker || tracker.w !== sw || tracker.h !== sh) tracker = new Core.Tracker({ need: STEADY[steadyLevel].need, maxShift: STEADY[steadyLevel].shift * sw, w: sw, h: sh });
       var r = tracker.update(det, gray);
       var shown = r.quad ? { quad: r.quad, area: det ? det.area : 0.1 } : null;   // steadied outline
       prevGray = gray; lastDet = shown;
@@ -818,7 +845,8 @@ if (typeof module !== 'undefined') module.exports = Core;
     var green = r.progress > 0;
     drawQuad(det.quad, m, green ? '#3ddc84' : '#ffb020', green ? 'rgba(61,220,132,.18)' : 'rgba(255,176,32,.12)');
     if (det.area < 0.08) setHint('Move closer');
-    else setHint(r.progress >= 1 ? 'Got it' : 'Hold still…');
+    else if (r.progress >= 1) setHint('Got it');
+    else setHint(steadyLevel ? 'Steady mode — keep holding still…' : 'Hold still…');
   }
 
   // ---------------------------------------------------------------- capture
@@ -832,35 +860,55 @@ if (typeof module !== 'undefined') module.exports = Core;
     var quad = det ? Core.expand(det.quad.map(function (p) { return [p[0] * f, p[1] * f]; }), 0.025, cw, ch)
                    : [[0, 0], [cw - 1, 0], [cw - 1, ch - 1], [0, ch - 1]];
     flash();
-    if (det) quickSend({ canvas: c, w: cw, h: ch, quad: quad });   // edges found: no stop, keep scanning
+    if (det) askOk({ canvas: c, w: cw, h: ch, quad: quad });       // edges found: show it and ask
     else review(c, quad, false);                                    // no edges: let the corners be placed
   }
 
-  // A captured receipt goes straight into the list; the camera carries on. It waits UNDO_MS with
-  // Undo / Adjust buttons, then sends itself. Long receipts: the part is added at once, with Undo.
-  function quickSend(sh) {
-    state = 'live';
+  // ---------------------------------------------------------------- "is this okay?"
+  var pending = null;   // { shot, flat } waiting for yes / no
+  function askOk(sh) {
+    state = 'confirm';
+    stopLoop();
     setTimeout(function () {
       var flat = flatten(sh);
-      if (longMode) {
-        sections.push(flat);
-        updateSections();
-        toast('Part ' + sections.length + ' added', 'Undo', function () { sections.pop(); updateSections(); });
-        loop();
-        return;
-      }
-      var row = addRow(thumbOf(flat), Date.now());
-      var timer = setTimeout(go, UNDO_MS);
-      function go() { clearButtons(row); sendRow(row, [flat]); }
-      setRow(row, 'wait', 'Sending in a moment…');
-      addButton(row, 'Undo', function () { clearTimeout(timer); row.el.remove(); rows.splice(rows.indexOf(row), 1); });
-      addButton(row, 'Adjust', function () {
-        clearTimeout(timer); row.el.remove(); rows.splice(rows.indexOf(row), 1);
-        stopLoop(); review(sh.canvas, sh.quad, true); stopCountdown();
-      });
-      loop();
+      pending = { shot: sh, flat: flat };
+      $('confirmImg').src = flat.toDataURL('image/jpeg', 0.8);
+      $('confirm').hidden = false;
+      $('camControls').hidden = true; $('reviewControls').hidden = true; $('confirmControls').hidden = false;
+      $('yesBtn').textContent = longMode ? 'Yes, add part' : 'Yes, send';
+      setHint(''); sizeOverlay();
     }, 30);
   }
+  function closeAsk() {
+    $('confirm').hidden = true; $('confirmControls').hidden = true; $('confirmImg').removeAttribute('src');
+    pending = null;
+  }
+  $('yesBtn').onclick = function () {
+    if (!pending) return;
+    var flat = pending.flat;
+    closeAsk();
+    if (longMode) { sections.push(flat); updateSections(); toast('Part ' + sections.length + ' added'); }
+    else send([flat]);
+    backToCamera();
+  };
+  $('noBtn').onclick = function () {
+    if (!pending) return;
+    closeAsk();
+    steadyLevel = Math.min(STEADY.length - 1, steadyLevel + 1);
+    tracker = null;                                   // the next one uses the longer hold
+    $('steadyBtn').hidden = false;
+    toast('OK — I\'ll wait for a steadier shot. Tip: ' + TIPS[(steadyLevel - 1) % TIPS.length]);
+    backToCamera();
+  };
+  $('adjustBtn').onclick = function () {
+    if (!pending) return;
+    var sh = pending.shot;
+    closeAsk();
+    review(sh.canvas, sh.quad, true); stopCountdown();
+  };
+  $('steadyBtn').onclick = function () {
+    steadyLevel = 0; tracker = null; this.hidden = true; toast('Back to normal speed');
+  };
 
   function addButton(row, label, fn) {
     var b = document.createElement('button'); b.className = 'btn'; b.textContent = label; b.onclick = fn;
@@ -877,7 +925,7 @@ if (typeof module !== 'undefined') module.exports = Core;
       b.onclick = function () { fn(); el.hidden = true; };
       el.appendChild(b);
     }
-    clearTimeout(toastTimer); toastTimer = setTimeout(function () { el.hidden = true; }, 2500);
+    clearTimeout(toastTimer); toastTimer = setTimeout(function () { el.hidden = true; }, msg.length > 40 ? 4500 : 2500);
   }
 
   function flash() {
@@ -1127,16 +1175,50 @@ if (typeof module !== 'undefined') module.exports = Core;
 
   function showResult(row, s) {
     if (s.status === 'logged') return setRow(row, /Check:/.test(s.message) ? 'wait' : 'ok', s.message);
-    if (s.status === 'duplicate') return setRow(row, 'dup', 'Already logged — not added again. ' + s.message.replace(/^Duplicate - not added again: /, ''));
+    if (s.status === 'duplicate') return setRow(row, 'dup', 'Already logged — not added again. ' + s.message.replace(/^Duplicate - not added again: |^Not added - /, ''));
+    if (s.status === 'confirm') return askDuplicate(row, s);
     if (s.status === 'failed') return setRow(row, 'bad', s.message);
     setRow(row, 'wait', s.message || 'Reading the receipt…');
     return new Promise(function (r) { setTimeout(r, 20000); }).then(function () { return follow(row, 0); });
   }
 
+  // The sheet found a receipt from the same shop, same day, same total. Nothing is written until
+  // you answer; if you never do, it is never added.
+  function askDuplicate(row, s) {
+    row.fileId = s.id;
+    var m = s.match || {};
+    setRow(row, 'wait', 'Already logged? ' + (m.merchant ? m.merchant + ', ' + m.date + ', ' + Number(m.total).toFixed(2) + ' (rows ' + m.rows + ')' : s.message));
+    clearButtons(row);
+    row.el.setAttribute('data-ask', '');
+    var q = document.createElement('div'); q.className = 'q'; q.textContent = 'Same shop, same day, same total. Add it anyway?';
+    row.st.parentNode.appendChild(q); (row.btns = row.btns || []).push(q);
+    function decide(add) {
+      clearButtons(row); row.el.removeAttribute('data-ask');
+      setRow(row, 'wait', add ? 'Adding…' : 'Leaving it out…');
+      api('decide', { id: s.id, add: add }, 400000).then(function (r) { showResult(row, r); },
+        function (e) { setRow(row, 'bad', 'Could not answer: ' + e.message); askDuplicate(row, s); });
+    }
+    addButton(row, 'Add anyway', function () { decide(true); });
+    addButton(row, "Don't add", function () { decide(false); });
+  }
+
+  // Questions still waiting from earlier (app closed before answering).
+  function loadHeld() {
+    api('held', {}, 30000).then(function (r) {
+      (r.held || []).forEach(function (h) {
+        if (rows.some(function (x) { return x.fileId === h.id; })) return;
+        var row = addRow(PLACEHOLDER, Date.now());
+        row.el.querySelector('.txt div').textContent = 'Receipt waiting for your answer';
+        askDuplicate(row, h);
+      });
+    }, function () {});
+  }
+  var PLACEHOLDER = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="40" height="52"><rect width="40" height="52" rx="4" fill="#2a2f37"/><text x="20" y="34" font-size="22" text-anchor="middle" fill="#a3aab5">?</text></svg>');
+
   // Fallback when the direct answer did not arrive: checks where the receipt has got to.
   function follow(row, n) {
     return api('status', { id: row.fileId }, 30000).then(function (s) {
-      if (s.status !== 'waiting') return showResult(row, s);
+      if (s.status !== 'waiting') return showResult(row, s);   // logged, duplicate, failed or confirm
       if (n >= 30) return setRow(row, 'wait', 'Saved to your Drive. It will be read within 10 minutes, app open or not.');
       setRow(row, 'wait', /retry/i.test(s.message) ? s.message : 'Saved to your Drive — still reading…');
       return new Promise(function (r) { setTimeout(r, 10000); }).then(function () { return follow(row, n + 1); });
@@ -1202,6 +1284,7 @@ if (typeof module !== 'undefined') module.exports = Core;
 
   function backToCamera() {
     shot = null;
+    $('confirm').hidden = true; $('confirmControls').hidden = true;
     still.hidden = true; video.style.visibility = '';
     $('reviewControls').hidden = true;
     if (!video.srcObject) {          // no live camera: back to the photo buttons
@@ -1250,7 +1333,7 @@ if (typeof module !== 'undefined') module.exports = Core;
     if (!document.hidden && state === 'live') loop();
   });
 
-  checkConnection().then(resumeOutbox);
+  checkConnection().then(function (ok) { resumeOutbox(); if (ok) loadHeld(); });
   startCamera();
 })();
 </script>
