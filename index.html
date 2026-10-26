@@ -100,7 +100,6 @@
   <header>
     <h1>Receipt Scanner</h1>
     <div style="display:flex;gap:8px;align-items:center;min-width:0">
-      <button id="steadyBtn" class="chip on" hidden title="Steady mode is on. Tap to go back to normal speed">Steady ✕</button>
       <button id="longBtn" class="chip" aria-pressed="false">Long receipt</button>
     </div>
   </header>
@@ -640,10 +639,10 @@ if (typeof module !== 'undefined') module.exports = Core;
   var MAX_SRC = 3000;            // longest side of the photo kept for cropping
   var OUT_W = 1400;              // width of the flattened receipt
   var AUTO_SEND_S = 3;           // seconds to look at a hand-adjusted crop before it sends itself
-  // How long a receipt must be held steady before the photo is taken. Each "No, retake" moves one
-  // level up for the rest of this session (it resets whenever the app is opened again): a longer,
-  // stiller hold gives a sharper photo when something is making it hard.
-  var STEADY = [{ need: 5, shift: 0.045 }, { need: 10, shift: 0.035 }, { need: 16, shift: 0.028 }, { need: 24, shift: 0.022 }];
+  // How long a receipt must be held steady before the photo is taken. The steady hold is the normal
+  // way it works (~1 s, tight tolerance, for a sharp photo). Each "No, retake" moves one level up for
+  // the rest of this session; it resets whenever the app is opened again.
+  var STEADY = [{ need: 10, shift: 0.035 }, { need: 16, shift: 0.028 }, { need: 24, shift: 0.022 }];
   var steadyLevel = 0;
   var TIPS = ['Fill more of the screen with the receipt', 'Lay it flat on something darker than the paper',
               'Avoid shadows and glare from lights', 'Hold the phone directly above the receipt'];
@@ -846,7 +845,7 @@ if (typeof module !== 'undefined') module.exports = Core;
     drawQuad(det.quad, m, green ? '#3ddc84' : '#ffb020', green ? 'rgba(61,220,132,.18)' : 'rgba(255,176,32,.12)');
     if (det.area < 0.08) setHint('Move closer');
     else if (r.progress >= 1) setHint('Got it');
-    else setHint(steadyLevel ? 'Steady mode — keep holding still…' : 'Hold still…');
+    else setHint(steadyLevel ? 'Keep holding still — taking a little longer…' : 'Hold still…');
   }
 
   // ---------------------------------------------------------------- capture
@@ -896,8 +895,7 @@ if (typeof module !== 'undefined') module.exports = Core;
     closeAsk();
     steadyLevel = Math.min(STEADY.length - 1, steadyLevel + 1);
     tracker = null;                                   // the next one uses the longer hold
-    $('steadyBtn').hidden = false;
-    toast('OK — I\'ll wait for a steadier shot. Tip: ' + TIPS[(steadyLevel - 1) % TIPS.length]);
+    toast('OK — I\'ll wait for a steadier shot. Tip: ' + TIPS[(steadyLevel + TIPS.length - 1) % TIPS.length]);
     backToCamera();
   };
   $('adjustBtn').onclick = function () {
@@ -905,9 +903,6 @@ if (typeof module !== 'undefined') module.exports = Core;
     var sh = pending.shot;
     closeAsk();
     review(sh.canvas, sh.quad, true); stopCountdown();
-  };
-  $('steadyBtn').onclick = function () {
-    steadyLevel = 0; tracker = null; this.hidden = true; toast('Back to normal speed');
   };
 
   function addButton(row, label, fn) {
