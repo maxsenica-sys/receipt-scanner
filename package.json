@@ -1,0 +1,17 @@
+{
+  "name": "receipt-scanner",
+  "private": true,
+  "description": "Receipt Scanner: phone web app + Vercel API + Supabase",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.4.0",
+    "@supabase/storage-js": "^2.119.0",
+    "@vercel/functions": "^3.10.6",
+    "pg": "^8.23.1"
+  }
+}

@@ -11,7 +11,30 @@ The app holds no secrets. The spreadsheet's web app URL and the scanner key trav
 (never sent to any server) and are remembered on the phone. Every request carries the key and the script
 refuses anything without it.
 
-## Setup
+## In-house app (Vercel + Supabase)
+
+The newer version runs on its own: `app/index.html` is the phone app, `api/index.js` is one Vercel function,
+receipts and items live in Supabase Postgres (`db/schema.sql`), photos in the private Supabase Storage bucket
+`receipts`, and Claude reads each photo directly. The Google Sheet and Drive keep receiving every receipt
+as a backup (`record` / `unrecord` in `apps-script/Code.gs`), and a daily job retries any backup that failed.
+
+Vercel environment variables:
+
+| Name | Value |
+|---|---|
+| `DATABASE_URL` | Supabase → Connect → Transaction pooler connection string |
+| `SUPABASE_URL` | `https://<project>.supabase.co` |
+| `SUPABASE_SECRET_KEY` | Supabase → Settings → API Keys → secret key |
+| `ANTHROPIC_API_KEY` | the same key the Apps Script uses |
+| `APP_KEY` | any long random string; the app link is `https://<app>/#k=<APP_KEY>` |
+| `GOOGLE_BACKUP_URL` | the Apps Script web app `/exec` URL |
+| `GOOGLE_BACKUP_KEY` | the scanner key the Apps Script already uses |
+| `CRON_SECRET` | optional |
+
+Tests: `TEST_DATABASE_URL=postgres://... npm test` (API against a real Postgres with stand-ins for storage,
+Claude, exchange rates and Google) and `test/browser/e2e.js` (the whole app in Chromium with a fake camera).
+
+## Setup (original Google-only app)
 
 1. Apps Script: replace `Code.gs` with `apps-script/Code.gs`, delete any `Scanner` HTML file, Save.
 2. Deploy → Manage deployments → pencil on the web app → Version: **New version**,

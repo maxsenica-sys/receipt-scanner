@@ -173,6 +173,8 @@ function doPost(e) {
       case 'status':  out = receiptStatus_(req.id); break;
       case 'decide':  out = decide_(req.id, !!req.add); break;
       case 'held':    out = { held: heldList_() }; break;
+      case 'record':  out = recordFromApp_(req.receipt, req.image, req.mime); break;
+      case 'unrecord': out = unrecordFromApp_(req.rid); break;
       default: throw new Error('Unknown action ' + req.action);
     }
     out.ok = true;
@@ -266,6 +268,58 @@ function decide_(fileId, add) {
   file.setDescription(message);
   file.moveTo(env.processed);
   return { id: fid, status: 'duplicate', message: message };
+}
+
+// ------------------------------------------------------------------ backup copy from the in-house app
+// The Receipt Scanner app (Vercel + Supabase) reads receipts itself and sends each finished one here,
+// so Season_Expenses and the Drive folders stay a complete copy. Nothing is read with Claude here.
+// receipt: { rid, date: 'YYYY-MM-DD', merchant, currency, payment, receipt_no, receipt_time, flags,
+//            items: [{ description, original_text, category, qty, unit_price }] }
+function recordFromApp_(rec, imageB64, mime) {
+  if (!rec || !rec.rid || !rec.date || !(rec.items || []).length) throw new Error('Incomplete receipt');
+  const props = PropertiesService.getScriptProperties();
+  const ss = ss_(), ws = ss.getSheetByName('Expenses');
+  const lock = LockService.getScriptLock();
+  lock.waitLock(60000);
+  try {
+    if (existingIds_(ws).has(String(rec.rid))) return { skipped: 'already in the sheet' };
+    const data = { merchant: rec.merchant || '', date: rec.date, date_printed: null, currency: rec.currency || DEFAULT_CURRENCY,
+                   payment_method: rec.payment || null, receipt_number: rec.receipt_no || null, receipt_time: rec.receipt_time || null,
+                   receipt_total: null, confidence: 'high', notes: rec.flags || null,
+                   items: rec.items.map(i => ({ description_en: i.description, original_text: i.original_text || '', category: i.category,
+                                                quantity: Number(i.qty), unit_price: Number(i.unit_price),
+                                                line_total: Number(i.qty) * Number(i.unit_price) })) };
+    const ext = mime === 'application/pdf' ? '.pdf' : '.jpg';
+    const res = writeReceipt_(ws, data, String(rec.rid), readCategories_(ss), readFxCurrencies_(ss), 'app' + ext, mime);
+    if (rec.flags) ws.getRange(res.firstRow, COL.flag, res.count, 1).setValue(String(rec.flags).slice(0, 300));
+    SpreadsheetApp.flush();
+    if (imageB64) {
+      const f = DriveApp.getFolderById(props.getProperty('folder_processed'))
+        .createFile(Utilities.newBlob(Utilities.base64Decode(imageB64), mime || 'image/jpeg', res.fileName));
+      f.setDescription('Copy from the Receipt Scanner app. ' + summary_(data, res, ss.getSpreadsheetTimeZone()));
+    } else {
+      ws.getRange(res.firstRow, COL.file, res.count, 1).setValue('(typed in the app)');
+    }
+    return { rows: res.firstRow + '-' + (res.firstRow + res.count - 1) };
+  } finally { lock.releaseLock(); }
+}
+
+// Removes a receipt's rows (deleted or about to be replaced in the app). The photo stays in Drive.
+function unrecordFromApp_(rid) {
+  if (!rid) throw new Error('No receipt id');
+  const ws = ss_().getSheetByName('Expenses');
+  const lock = LockService.getScriptLock();
+  lock.waitLock(60000);
+  try {
+    const last = ws.getLastRow();
+    if (last < 2) return { removed: 0 };
+    const ids = ws.getRange(2, COL.id, last - 1, 1).getValues();
+    let removed = 0;
+    for (let i = ids.length - 1; i >= 0; i--) {          // bottom up, so row numbers stay valid
+      if (String(ids[i][0]) === String(rid)) { ws.deleteRow(i + 2); removed++; }
+    }
+    return { removed: removed };
+  } finally { lock.releaseLock(); }
 }
 
 // ------------------------------------------------------------------ main loop
