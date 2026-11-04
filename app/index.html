@@ -815,17 +815,19 @@ if (typeof module !== 'undefined') module.exports = Core;
 
   // ---------------------------------------------------------------- the key
   // The app's link carries its key after the # (never sent to any web server): …/#k=<key>.
-  // It is also remembered on this phone, in case the app is opened without it.
+  // It is also remembered on this phone, in case the app is opened without it. A key in the link is only
+  // remembered once the server accepts it, and if it is refused the remembered one is tried, so a home-screen
+  // icon saved with an old link keeps working after the right key has been entered once.
   var CFG = readConfig();
   function readConfig() {
     var h = new URLSearchParams(location.hash.replace(/^#/, ''));
-    var c = { key: h.get('k') || '' };
-    try {
-      if (c.key) localStorage.setItem('receiptScannerApp', JSON.stringify(c));
-      else c = JSON.parse(localStorage.getItem('receiptScannerApp') || 'null') || c;
-    } catch (e) { /* private mode: the link itself still works */ }
-    return c;
+    var saved = '';
+    try { saved = (JSON.parse(localStorage.getItem('receiptScannerApp') || 'null') || {}).key || ''; } catch (e) { /* private mode */ }
+    var fromLink = h.get('k') || '';
+    if (!fromLink) return { key: saved };
+    return { key: fromLink, alt: saved && saved !== fromLink ? saved : '' };
   }
+  function rememberKey() { try { localStorage.setItem('receiptScannerApp', JSON.stringify({ key: CFG.key })); } catch (e) {} }
   var $ = function (id) { return document.getElementById(id); };
   var video = $('video'), overlay = $('overlay'), still = $('still'), hint = $('hint').firstChild;
   var ctxO = overlay.getContext('2d');
@@ -867,11 +869,13 @@ if (typeof module !== 'undefined') module.exports = Core;
     setConn('', 'Connecting…');
     return api('ping', {}, 30000).then(function (r) {
       connected = true;
+      rememberKey();
       if (r.problems && r.problems.length) setConn('bad', 'Connected, but: ' + r.problems.join(' '), true);
       else setConn('ok', 'Connected');
       return true;
     }, function (e) {
       connected = false;
+      if (/^KEY:/.test(e.message) && CFG.alt) { CFG = { key: CFG.alt }; return checkConnection(); }   // the link's key is old: use the remembered one
       setConn('bad', /^KEY:/.test(e.message) ? e.message.replace(/^KEY:\s*/, '') : e.message, true);
       if (/^KEY:/.test(e.message)) showSetup();
       return false;

@@ -163,6 +163,14 @@ const check = (name, ok, extra) => { console.log((ok ? 'PASS ' : 'FAIL ') + name
     { const { ctx, page } = await open('#k=' + 'x'.repeat(48));
       await page.waitForSelector('#setup:not([hidden])', { timeout: 15000 });
       check('wrong key -> locked screen', /Unlock/.test(await page.textContent('#setup')));
+      // the right key typed in once -> unlocked; the old link (home-screen icon) opened again -> still unlocked
+      await page.fill('#setKey', KEY); await page.click('#setSave');
+      await page.waitForFunction(() => document.getElementById('conn').className === 'ok', null, { timeout: 15000 });
+      check('typing the key unlocks', await page.isHidden('#setup'));
+      const p2 = await ctx.newPage(); p2.on('pageerror', e => errs.push(e.message));
+      await p2.goto(APP + '#k=' + 'x'.repeat(48));
+      await p2.waitForFunction(() => document.getElementById('conn').className === 'ok', null, { timeout: 15000 }).catch(() => {});
+      check('old link opened again -> stays unlocked', await p2.isHidden('#setup') && await p2.evaluate(() => document.getElementById('conn').className === 'ok'));
       await ctx.close(); }
 
     // H. Nothing wider than the phone, at 320 px, on every screen
