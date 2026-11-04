@@ -1,0 +1,4 @@
+# The top-level index.html is the original Google-only scanner, served by GitHub Pages.
+# Vercel serves a real file before any rewrite, so it must not be deployed there, or it
+# would answer "/" instead of the app in app/index.html.
+/index.html

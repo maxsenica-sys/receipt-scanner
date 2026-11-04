@@ -6,6 +6,10 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
+const VJ = JSON.parse(fs.readFileSync(path.join(ROOT, 'vercel.json'), 'utf8'));
+const REWRITES = VJ.rewrites || [];
+const IGNORED = new Set((fs.existsSync(path.join(ROOT, '.vercelignore')) ? fs.readFileSync(path.join(ROOT, '.vercelignore'), 'utf8') : '')
+  .split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#')).map(l => l.replace(/^\//, '')));
 const TYPES = { '.html': 'text/html', '.png': 'image/png', '.js': 'text/javascript', '.json': 'application/json' };
 
 function start(port) {
@@ -30,9 +34,13 @@ function start(port) {
         });
         return;
       }
-      const rel = u.pathname === '/' ? '/app/index.html' : u.pathname;      // vercel.json rewrite
-      const f = path.join(ROOT, path.normalize(rel));
-      if (!f.startsWith(ROOT) || !fs.existsSync(f) || fs.statSync(f).isDirectory()) { res.writeHead(404); return res.end(); }
+      // Like Vercel: a deployed file wins; only when there is none do vercel.json's rewrites apply.
+      // ("/" is the directory's index.html.) Files listed in .vercelignore are not deployed.
+      const fileFor = p => { const f = path.join(ROOT, path.normalize(p === '/' || p.endsWith('/') ? p + 'index.html' : p));
+        return f.startsWith(ROOT) && fs.existsSync(f) && !fs.statSync(f).isDirectory() && !IGNORED.has(path.relative(ROOT, f)) ? f : null; };
+      let f = fileFor(u.pathname);
+      if (!f) { const rw = REWRITES.find(r => r.source === u.pathname); if (rw) f = fileFor(rw.destination); }
+      if (!f) { res.writeHead(404); return res.end(); }
       res.writeHead(200, { 'content-type': TYPES[path.extname(f)] || 'application/octet-stream' });
       fs.createReadStream(f).pipe(res);
     }).listen(port || 0, '127.0.0.1', () => resolve(server));

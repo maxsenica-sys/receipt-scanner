@@ -52,6 +52,7 @@ const check = (name, ok, extra) => { console.log((ok ? 'PASS ' : 'FAIL ') + name
     { const { ctx, page } = await open();
       await page.waitForFunction(() => document.getElementById('conn').className === 'ok', null, { timeout: 15000 });
       check('connects (health check passes, incl. storage round trip)', true, await page.textContent('#conn'));
+      check('"/" serves the new app, not the old Google-only scanner', await page.title() === 'Season Expenses' && await page.isVisible('#viewHome'), await page.title());
       check('opens on Home with the camera off', await page.isVisible('#viewHome') && await page.isHidden('#scanner') &&
         !(await page.evaluate(() => !!document.getElementById('video').srcObject)));
       await yes(page);
