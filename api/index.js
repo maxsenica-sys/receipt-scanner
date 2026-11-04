@@ -1,5 +1,5 @@
 // Receipt Scanner API. One endpoint, POST /api with { action, key, ... } -> JSON
-// { ok: true, ... } or { ok: false, error }. GET /api?cron=1 is the daily maintenance run.
+// { ok: true, ... } or { ok: false, error }. GET /api?cron=1 is the daily maintenance run; GET /api?version=1 the deploy's version.
 'use strict';
 const crypto = require('crypto');
 const L = require('../lib/logic');
@@ -298,6 +298,9 @@ module.exports = async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   try {
     if (req.method === 'GET') {
+      // The deploy's version, so an open app can tell it is out of date and reload itself. No key needed: it is only a commit id.
+      if (/[?&]version=1/.test(req.url || '')) return res.status(200).json({ ok: true,
+        version: process.env.VERCEL_GIT_COMMIT_SHA || process.env.VERCEL_DEPLOYMENT_ID || process.env.APP_VERSION || 'dev' });
       const isCron = /[?&]cron=1/.test(req.url || '');
       const auth = req.headers && req.headers.authorization;
       if (isCron && (!process.env.CRON_SECRET || auth === 'Bearer ' + process.env.CRON_SECRET)) return res.status(200).json(Object.assign({ ok: true }, await cron()));

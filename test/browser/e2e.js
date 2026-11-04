@@ -43,7 +43,8 @@ const check = (name, ok, extra) => { console.log((ok ? 'PASS ' : 'FAIL ') + name
   // The fake camera loops one short video, so two scans can be the very same frame, byte for byte
   // (a real camera never repeats a photo exactly). Forget earlier photos' fingerprints before each
   // scan so every scenario tests what it is meant to, not the exact-photo check.
-  const yes = async page => { await S.q('update receipts set photo_sha = null'); await page.waitForSelector('#confirm:not([hidden])', { timeout: 40000 }); await page.click('#yesBtn'); };
+  const yes = async page => { await S.q('update receipts set photo_sha = null');
+    if (await page.isHidden('#scanner')) await page.click('#scanBtn'); await page.waitForSelector('#confirm:not([hidden])', { timeout: 40000 }); await page.click('#yesBtn'); };
   const logText = page => page.textContent('#log');
 
   try {
@@ -51,18 +52,25 @@ const check = (name, ok, extra) => { console.log((ok ? 'PASS ' : 'FAIL ') + name
     { const { ctx, page } = await open();
       await page.waitForFunction(() => document.getElementById('conn').className === 'ok', null, { timeout: 15000 });
       check('connects (health check passes, incl. storage round trip)', true, await page.textContent('#conn'));
+      check('opens on Home with the camera off', await page.isVisible('#viewHome') && await page.isHidden('#scanner') &&
+        !(await page.evaluate(() => !!document.getElementById('video').srcObject)));
       await yes(page);
       await page.waitForFunction(() => /Logged/.test(document.getElementById('log').textContent), null, { timeout: 40000 });
       check('scan logged', await count('receipts') === 1, (await logText(page)).trim().slice(0, 80));
+      check('scanner shows the result line', /Logged/.test(await page.textContent('#scanLast')));
+      await page.click('#closeScan');
+      check('Close turns the camera off', await page.isHidden('#scanner') && !(await page.evaluate(() => !!document.getElementById('video').srcObject)));
+      check('the scan is listed under Scans on Home', await page.isVisible('#homeScans') && /Logged/.test(await page.textContent('#homeScans')));
       const photoInStorage = Object.keys(F.files).filter(k => !/^selftest/.test(k)).length;
       check('photo uploaded straight to storage (not through the server)', photoInStorage === 1 && F.claudeCalls.length === 1);
       await page.click('#nav [data-tab="list"]');
-      await page.waitForSelector('#list .card', { timeout: 10000 });
+      await page.waitForSelector('#list .rc', { timeout: 10000 });
       check('Receipts tab lists it', /Migros/.test(await page.textContent('#list')) && /59\.85 TRY/.test(await page.textContent('#list')));
       await page.screenshot({ path: path.join(process.env.SHOTS || '.', 'list.png') });
-      await page.click('#nav [data-tab="sum"]');
-      await page.waitForSelector('#sum .kpi', { timeout: 10000 });
-      check('Summary shows the AUD total', /A\$2\.18/.test(await page.textContent('#sum')), (await page.textContent('#sum .kpi.big')));
+      await page.click('#nav [data-tab="home"]');
+      await page.waitForSelector('#home .hero', { timeout: 10000 });
+      check('Home dashboard shows the AUD total', /A\$2\.18/.test(await page.textContent('#home .hero')), (await page.textContent('#home .hero')).slice(0, 60));
+      check('Home lists it under latest receipts and categories', /Migros/.test(await page.textContent('#home')) && /Groceries/.test(await page.textContent('#home')));
       await page.screenshot({ path: path.join(process.env.SHOTS || '.', 'summary.png') });
       await ctx.close(); }
 
@@ -95,7 +103,7 @@ const check = (name, ok, extra) => { console.log((ok ? 'PASS ' : 'FAIL ') + name
     { const { ctx, page } = await open();
       await page.waitForFunction(() => document.getElementById('conn').className === 'ok', null, { timeout: 15000 });
       await page.click('#nav [data-tab="list"]');
-      await page.click('#list .card:has-text("Local market")');
+      await page.click('#list .rc:has-text("Local market")');
       await page.click('#sheetBody >> text=Edit');
       const f = (await page.$$('#sheetBody .itemform'))[1];
       await (await f.$$('input'))[1].fill('3');
@@ -103,7 +111,7 @@ const check = (name, ok, extra) => { console.log((ok ? 'PASS ' : 'FAIL ') + name
       await page.waitForFunction(() => /550\.00 TRY/.test(document.getElementById('list').textContent), null, { timeout: 15000 });
       check('edit saved: 3 punnets -> 100 + 3 x 150 = 550', Number((await S.q("select total from receipts where merchant = 'Local market'"))[0].total) === 550);
       page.once('dialog', d => d.accept());
-      await page.click('#list .card:has-text("Local market")');
+      await page.click('#list .rc:has-text("Local market")');
       await page.click('#sheetBody >> text=Delete');
       await page.waitForFunction(() => !/Local market/.test(document.getElementById('list').textContent), null, { timeout: 15000 });
       check('delete removes it', (await S.q("select count(*)::int n from receipts where merchant = 'Local market'"))[0].n === 0);
@@ -115,6 +123,7 @@ const check = (name, ok, extra) => { console.log((ok ? 'PASS ' : 'FAIL ') + name
       await yes(page);
       await page.waitForFunction(() => /Add anyway/.test(document.getElementById('log').textContent), null, { timeout: 40000 });
       check('same shop/day/total -> asks first, nothing written', await count('receipts') === 1 && await count('pending') === 1);
+      await page.click('#closeScan');
       await page.click('#log >> text=Add anyway');
       await page.waitForFunction(() => /Logged/.test(document.getElementById('log').textContent), null, { timeout: 40000 });
       check('"Add anyway" -> logged', await count('receipts') === 2 && await count('pending') === 0);
@@ -161,9 +170,32 @@ const check = (name, ok, extra) => { console.log((ok ? 'PASS ' : 'FAIL ') + name
       const wide = async () => page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 0.5 ||
         [...document.querySelectorAll('body *')].some(e => { const r = e.getBoundingClientRect(); return r.width && (r.right > innerWidth + 0.5) && getComputedStyle(e).position !== 'fixed' && e.offsetParent; }));
       const res = {};
-      for (const t of ['scan', 'list', 'sum']) { await page.click('#nav [data-tab="' + t + '"]'); await page.waitForTimeout(800); res[t] = await wide(); }
+      for (const t of ['home', 'list']) { await page.click('#nav [data-tab="' + t + '"]'); await page.waitForTimeout(800); res[t] = await wide(); }
+      await page.click('#scanBtn'); await page.waitForTimeout(800); res.scan = await wide(); await page.click('#closeScan');
       await page.click('#nav [data-tab="list"]'); await page.click('#addBtn'); await page.waitForTimeout(300); res.add = await wide();
-      check('320 px: nothing cut off on scan, receipts, summary, add form', !Object.values(res).some(Boolean), JSON.stringify(res));
+      check('320 px: nothing cut off on home, receipts, scanner, add form', !Object.values(res).some(Boolean), JSON.stringify(res));
+      await ctx.close(); }
+
+    // I. A new deploy -> the open app notices and reloads itself (no re-adding to the home screen)
+    { const { ctx, page } = await open();
+      await page.waitForFunction(() => document.getElementById('conn').className === 'ok', null, { timeout: 15000 });
+      await page.waitForTimeout(500);
+      await page.evaluate(() => { window.__old = true; });
+      await ctx.route('**/api?version=1', r => r.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, version: 'next-deploy' }) }));
+      await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+      await page.waitForFunction(() => !window.__old, null, { timeout: 10000 }).catch(() => {});
+      check('new version -> app reloads itself', await page.evaluate(() => !window.__old));
+      // ...but never in the middle of a scan: it waits and offers the update instead
+      await page.waitForSelector('#home .hero', { timeout: 15000 });
+      await page.evaluate(() => { window.__old = true; });
+      await page.click('#scanBtn');
+      await ctx.route('**/api?version=1', r => r.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, version: 'third-deploy' }) }));
+      await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+      await page.waitForSelector('#update:not([hidden])', { timeout: 10000 });
+      check('scanner open -> no reload, update offered', await page.evaluate(() => window.__old === true));
+      await page.click('#closeScan');
+      await page.waitForFunction(() => !window.__old, null, { timeout: 10000 }).catch(() => {});
+      check('closing the scanner -> update applied', await page.evaluate(() => !window.__old));
       await ctx.close(); }
   } catch (e) {
     console.log('FAIL (crashed) ' + e.stack); fail++;

@@ -6,138 +6,213 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
 <meta name="apple-mobile-web-app-title" content="Receipts">
-<meta name="theme-color" content="#0d0f12">
+<meta name="theme-color" content="#0b0d10">
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="icon" href="icon-180.png">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Receipt Scanner</title>
+<title>Season Expenses</title>
 <style>
   :root {
-    --bg: #0d0f12; --panel: #171a1f; --line: #2a2f37; --text: #f2f4f7; --muted: #a3aab5;
-    --accent: #3ddc84; --warn: #ffb020; --bad: #ff5d5d;
+    --bg: #0b0d10; --panel: #15181d; --panel2: #1c2027; --line: #262b33; --text: #f3f5f7; --muted: #9aa3ae; --faint: #6b7480;
+    --accent: #3ddc84; --accent-ink: #062b16; --accent-soft: rgba(61,220,132,.14); --warn: #ffb020; --bad: #ff6b6b;
+    --r: 16px;
   }
-  * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
-    font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; overflow-x: hidden; }
-  button { font: inherit; color: inherit; border: 0; cursor: pointer; min-height: 44px; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); overflow-x: hidden;
+    font: 15px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif; }
+  body { position: relative; }
+  button { font: inherit; color: inherit; border: 0; cursor: pointer; min-height: 44px; background: none; }
   [hidden] { display: none !important; }
+  .num { font-variant-numeric: tabular-nums; }
 
+  /* ---------- app frame: scrolling page + bottom bar ---------- */
   #app { display: flex; flex-direction: column; height: 100%; }
-  header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px;
-    padding: calc(env(safe-area-inset-top) + 8px) 16px 8px; }
-  header h1 { font-size: 17px; margin: 0; font-weight: 600; white-space: nowrap; }
-  header .chip { white-space: nowrap; }
-  .chip { background: var(--panel); border: 1px solid var(--line); border-radius: 22px; padding: 0 14px; font-size: 14px; }
-  .chip.on { background: var(--accent); color: #062b16; border-color: var(--accent); font-weight: 600; }
+  #main { flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  .page { padding: calc(env(safe-area-inset-top) + 14px) 16px 28px; max-width: 640px; margin: 0 auto; }
+  .ptitle { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+  .ptitle h1 { font-size: 28px; line-height: 1.15; margin: 0; font-weight: 700; letter-spacing: -.01em; }
+  .ptitle .sub { color: var(--muted); font-size: 14px; margin-top: 4px; }
+  .iconbtn { width: 44px; height: 44px; border-radius: 22px; background: var(--panel); border: 1px solid var(--line);
+    display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; }
+  .iconbtn svg { width: 20px; height: 20px; }
 
+  #nav { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center;
+    border-top: 1px solid var(--line); background: rgba(21,24,29,.97); padding: 6px 12px calc(env(safe-area-inset-bottom) + 6px); }
+  #nav .tabbtn { display: flex; flex-direction: column; align-items: center; gap: 2px; color: var(--faint); font-size: 13px; font-weight: 600; min-height: 52px; justify-content: center; position: relative; }
+  #nav .tabbtn svg { width: 24px; height: 24px; }
+  #nav .tabbtn.on { color: var(--text); }
+  #nav .tabbtn.on svg { color: var(--accent); }
+  #scanBtn { display: flex; align-items: center; gap: 8px; background: var(--accent); color: var(--accent-ink); font-weight: 700; font-size: 16px;
+    border-radius: 28px; padding: 0 22px; min-height: 52px; margin: 0 8px; box-shadow: 0 6px 20px rgba(61,220,132,.25); }
+  #scanBtn svg { width: 22px; height: 22px; }
+  .badge { position: absolute; top: 2px; left: calc(50% + 6px); min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px;
+    background: var(--warn); color: #241600; font-size: 13px; line-height: 20px; text-align: center; }
+
+  /* ---------- banners ---------- */
+  #conn { display: flex; align-items: center; gap: 10px; padding: 10px 16px; padding-top: calc(env(safe-area-inset-top) + 10px);
+    font-size: 14px; background: var(--panel); border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+  #conn.ok { display: none; }
+  #conn .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--warn); flex: 0 0 auto; }
+  #conn.bad { background: #3a1416; }
+  #conn.bad .dot { background: var(--bad); }
+  #conn .msg { flex: 1 1 auto; min-width: 0; }
+  #conn button { flex: 0 0 auto; white-space: nowrap; min-height: 36px; }
+  #conn:not(.ok) ~ #main .page { padding-top: 14px; }
+  #update { position: fixed; left: 16px; right: 16px; bottom: calc(env(safe-area-inset-bottom) + 84px); z-index: 30;
+    display: flex; align-items: center; gap: 12px; background: var(--text); color: var(--bg); border-radius: 14px; padding: 10px 10px 10px 16px;
+    box-shadow: 0 10px 30px rgba(0,0,0,.4); font-weight: 600; }
+  #update span { flex: 1 1 auto; min-width: 0; }
+  #update button { background: var(--bg); color: var(--text); border-radius: 10px; padding: 0 14px; }
+  #toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(env(safe-area-inset-bottom) + 84px); z-index: 40;
+    max-width: calc(100% - 32px); background: rgba(28,32,39,.97); border: 1px solid var(--line); border-radius: 14px; padding: 10px 16px;
+    font-size: 15px; box-shadow: 0 10px 30px rgba(0,0,0,.4); overflow-wrap: anywhere; }
+  #scanner:not([hidden]) ~ #toast { bottom: calc(env(safe-area-inset-bottom) + 110px); }
+
+  /* ---------- cards & dashboard ---------- */
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 16px; margin-bottom: 12px; }
+  .label { color: var(--muted); font-size: 13px; font-weight: 600; letter-spacing: .02em; }
+  .hero .big { font-size: 40px; line-height: 1.1; font-weight: 750; letter-spacing: -.02em; margin: 6px 0 12px; overflow-wrap: anywhere; }
+  .track { height: 8px; background: var(--panel2); border-radius: 4px; overflow: hidden; }
+  .track i { display: block; height: 100%; background: var(--accent); border-radius: 4px; }
+  .hero .row2 { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; color: var(--muted); font-size: 13px; margin-top: 8px; }
+  .hero .proj { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); font-size: 15px; }
+  .hero .proj b { font-size: 17px; }
+  .tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-bottom: 12px; }
+  .tile { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 12px 10px; min-width: 0; }
+  .tile b { display: block; font-size: 19px; font-weight: 700; margin-top: 4px; overflow-wrap: anywhere; }
+  .callout { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; background: rgba(255,176,32,.1); border: 1px solid rgba(255,176,32,.35);
+    border-radius: 14px; padding: 12px 14px; margin-bottom: 12px; color: var(--text); }
+  .callout .dotw { width: 10px; height: 10px; border-radius: 50%; background: var(--warn); flex: 0 0 auto; }
+  .callout span { flex: 1 1 auto; min-width: 0; }
+  .callout .go { color: var(--muted); flex: 0 0 auto; }
+  .h2 { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin: 26px 2px 10px; }
+  .h2 h2 { font-size: 19px; margin: 0; font-weight: 700; }
+  .h2 .link { color: var(--accent); font-weight: 600; font-size: 15px; min-height: 44px; padding: 0 2px; }
+  .cmp { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+  .cmp b { display: block; font-size: 22px; font-weight: 700; margin-top: 2px; }
+  .trend { display: inline-block; margin-top: 10px; font-size: 14px; font-weight: 600; padding: 4px 10px; border-radius: 12px; background: var(--panel2); }
+  .trend.up { color: var(--warn); } .trend.down { color: var(--accent); }
+  .chart { margin-top: 4px; }
+  .chart .cap { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; margin-bottom: 10px; min-height: 44px; }
+  .chart .cap b { font-size: 20px; }
+  .chart .cap span { color: var(--muted); font-size: 13px; text-align: right; }
+  .chart svg { display: block; width: 100%; touch-action: pan-y; }
+  .catrow { display: block; width: 100%; text-align: left; padding: 10px 0; border-bottom: 1px solid var(--line); }
+  .catrow:last-child { border-bottom: 0; padding-bottom: 2px; }
+  .catrow .top { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: baseline; margin-bottom: 8px; }
+  .catrow .name { font-weight: 600; overflow-wrap: anywhere; }
+  .catrow .val { font-weight: 600; text-align: right; white-space: nowrap; }
+  .catrow .val small { color: var(--muted); font-weight: 500; font-size: 13px; margin-left: 6px; }
+  .mrow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+  .mrow:last-child { border-bottom: 0; padding-bottom: 2px; }
+  .mrow .name { font-weight: 600; }
+  .mrow .val { font-weight: 700; text-align: right; white-space: nowrap; }
+  .mrow .sub { grid-column: 1 / -1; color: var(--muted); font-size: 13px; }
+  .note { color: var(--muted); font-size: 13px; margin: 8px 2px; }
+  .warnnote { color: var(--warn); font-size: 13px; }
+
+  /* ---------- receipts list ---------- */
+  .search { display: flex; gap: 8px; margin-bottom: 10px; }
+  .search input { flex: 1 1 auto; min-width: 0; }
+  input, select { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px;
+    min-height: 44px; min-width: 0; width: 100%; }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+  .chip { background: var(--panel); border: 1px solid var(--line); border-radius: 22px; padding: 0 14px; font-size: 14px; font-weight: 600; color: var(--muted); }
+  .chip.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .btn { background: var(--panel2); border: 1px solid var(--line); border-radius: 12px; padding: 0 16px; font-size: 15px; font-weight: 600; }
+  .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .btn.danger { color: var(--bad); }
+  .btn.wide { width: 100%; }
+  .listsum { color: var(--muted); font-size: 14px; margin: 6px 2px 0; }
+  .day { display: flex; justify-content: space-between; gap: 10px; color: var(--muted); font-size: 13px; font-weight: 700;
+    margin: 20px 2px 8px; text-transform: uppercase; letter-spacing: .05em; }
+  .rc { display: flex; gap: 12px; align-items: center; width: 100%; text-align: left; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 14px; padding: 12px 14px; margin-bottom: 8px; }
+  .rc .ico { width: 40px; height: 40px; border-radius: 12px; background: var(--panel2); display: flex; align-items: center; justify-content: center;
+    font-weight: 700; color: var(--muted); flex: 0 0 auto; font-size: 16px; }
+  .rc .who { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+  .rc .who b { display: block; font-size: 15px; font-weight: 600; }
+  .rc .who span { color: var(--muted); font-size: 13px; }
+  .rc .amt { text-align: right; flex: 0 0 auto; }
+  .rc .amt b { display: block; font-weight: 700; }
+  .rc .amt span { color: var(--muted); font-size: 13px; }
+  .flagdot { color: var(--warn); font-size: 13px; display: block; }
+  .empty { color: var(--muted); text-align: center; padding: 36px 16px; }
+
+  /* ---------- scans in progress (home) ---------- */
+  #log .row { display: flex; gap: 10px; align-items: flex-start; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  #log .row:last-child { border-bottom: 0; }
+  #log .row img { width: 40px; height: 52px; object-fit: cover; border-radius: 6px; flex: 0 0 auto; background: #222; }
+  #log .row .txt { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+  #log .row .st { font-size: 13px; color: var(--muted); }
+  #log .row.ok .st { color: var(--accent); }
+  #log .row.bad .st { color: var(--bad); }
+  #log .row.wait .st { color: var(--warn); }
+  #log .row button { flex: 0 0 auto; }
+  #log .row .q { color: var(--text); font-size: 14px; margin-top: 4px; }
+  #log .row[data-ask] { flex-wrap: wrap; }
+  #log .row[data-ask] .txt { flex: 1 1 calc(100% - 60px); }
+  #log .row[data-ask] button { flex: 1 1 40%; }
+  #homeScans .card { padding: 0; overflow: hidden; }
+
+  /* ---------- scanner (full screen, only while scanning) ---------- */
+  #scanner { position: fixed; inset: 0; z-index: 15; background: #000; display: flex; flex-direction: column; }
+  #scanner .bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;
+    padding: calc(env(safe-area-inset-top) + 8px) 12px 8px; background: #000; }
+  #scanner .bar { flex-wrap: nowrap; }
+  #scanner .bar b { font-size: 17px; flex: 1 1 auto; min-width: 0; text-align: center; }
+  @media (max-width: 359px) { #scanner .bar b { display: none; } }
+  label.btn { min-height: 44px; }
+  #closeScan { background: rgba(255,255,255,.12); border-radius: 22px; padding: 0 16px; font-weight: 600; }
+  #longBtn.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
   #stage { position: relative; flex: 1 1 auto; min-height: 0; background: #000; overflow: hidden; }
   #video, #still { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
   #overlay { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
   #hint { position: absolute; left: 16px; right: 16px; top: 12px; text-align: center; }
   #hint span { display: inline-block; background: rgba(0,0,0,.65); padding: 8px 14px; border-radius: 20px; font-size: 15px; }
-  #sections { position: absolute; left: 16px; bottom: 12px; background: rgba(0,0,0,.65);
-    padding: 6px 12px; border-radius: 16px; font-size: 14px; }
-
-  .controls { display: flex; align-items: center; justify-content: space-between; gap: 12px;
-    padding: 12px 16px; background: var(--bg); }
-  .controls .side { flex: 1 1 0; min-width: 0; display: flex; }
-  .controls .side.right { justify-content: flex-end; }
-  .btn { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 0 14px; font-size: 15px; }
-  .btn.primary { background: var(--accent); color: #062b16; border-color: var(--accent); font-weight: 600; }
-  #shutter { width: 72px; height: 72px; border-radius: 50%; background: #fff; border: 5px solid #555; flex: 0 0 auto; position: relative; }
-  #shutter svg { position: absolute; inset: -9px; width: 80px; height: 80px; transform: rotate(-90deg); pointer-events: none; }
-
+  #sections { position: absolute; left: 16px; bottom: 12px; background: rgba(0,0,0,.65); padding: 6px 12px; border-radius: 16px; font-size: 14px; }
   #countdown { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); display: flex; align-items: center; gap: 10px;
     background: rgba(0,0,0,.75); padding: 8px 16px; border-radius: 20px; font-size: 15px; white-space: nowrap; }
-
-  #log { max-height: 34vh; overflow-y: auto; background: var(--panel); border-top: 1px solid var(--line); }
-  #log:empty { display: none; }
-  .row { display: flex; gap: 10px; align-items: flex-start; padding: 10px 16px; border-bottom: 1px solid var(--line); }
-  .row img { width: 40px; height: 52px; object-fit: cover; border-radius: 4px; flex: 0 0 auto; background: #222; }
-  .row .txt { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
-  .row .st { font-size: 13px; color: var(--muted); }
-  .row.ok .st { color: var(--accent); }
-  .row.bad .st { color: var(--bad); }
-  .row.wait .st { color: var(--warn); }
-  .row.dup .st { color: var(--muted); }
-  .row button { flex: 0 0 auto; }
-
-  #conn { display: flex; align-items: center; gap: 8px; padding: 8px 16px; font-size: 14px; background: var(--panel);
-    border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
-  #conn .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--warn); flex: 0 0 auto; }
-  #conn.ok .dot { background: var(--accent); }
-  #conn.bad { background: #3a1416; }
-  #conn.bad .dot { background: var(--bad); }
-  #conn .msg { flex: 1 1 auto; min-width: 0; }
-  #conn button { flex: 0 0 auto; white-space: nowrap; min-height: 36px; }
-  #setup { position: fixed; inset: 0; z-index: 10; background: var(--bg); overflow-y: auto; padding: calc(env(safe-area-inset-top) + 24px) 16px 32px; }
-  #setup h2 { font-size: 20px; margin: 0 0 12px; }
-  #setup p { color: var(--muted); }
-  #setup input { width: 100%; min-width: 0; font: 15px monospace; padding: 12px; border-radius: 10px; border: 1px solid var(--line);
-    background: var(--panel); color: var(--text); margin: 4px 0 14px; }
+  .controls { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; background: #000; }
+  .controls .side { flex: 1 1 0; min-width: 0; display: flex; }
+  .controls .side.right { justify-content: flex-end; }
+  #shutter { width: 72px; height: 72px; border-radius: 50%; background: #fff; border: 5px solid #555; flex: 0 0 auto; position: relative; }
+  #shutter svg { position: absolute; inset: -9px; width: 80px; height: 80px; transform: rotate(-90deg); pointer-events: none; }
+  #scanLast { min-height: 0; padding: 0 16px calc(env(safe-area-inset-bottom) + 10px); background: #000; color: var(--muted); font-size: 14px;
+    overflow-wrap: anywhere; }
+  #scanLast:empty { display: none; }
+  #scanLast .ok { color: var(--accent); } #scanLast .bad { color: var(--bad); } #scanLast .wait { color: var(--warn); }
   #confirm { position: absolute; inset: 0; background: #000; display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 12px 16px 16px; }
   #confirm .q { font-size: 17px; font-weight: 600; text-align: center; }
   #confirm img { flex: 1 1 auto; min-height: 0; max-width: 100%; object-fit: contain; background: #fff; border-radius: 4px; }
-  .row .q { color: var(--text); font-size: 14px; margin-top: 4px; }
-  .row[data-ask] { flex-wrap: wrap; }
-  .row[data-ask] .txt { flex: 1 1 calc(100% - 60px); }
-  .row[data-ask] button { flex: 1 1 40%; }
-  /* ---- tabs and the non-camera screens ---- */
-  .view { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
-  .scroll { overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 12px 16px 24px; }
-  #nav { display: flex; border-top: 1px solid var(--line); background: var(--panel); padding-bottom: env(safe-area-inset-bottom); }
-  #nav button { flex: 1 1 0; background: none; color: var(--muted); font-size: 14px; font-weight: 600; min-height: 52px; }
-  #nav button.on { color: var(--accent); }
-  #nav .badge { display: inline-block; min-width: 20px; padding: 0 6px; border-radius: 10px; background: var(--warn); color: #241600; font-size: 13px; margin-left: 4px; }
-  .bar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
-  .bar input { flex: 1 1 auto; min-width: 0; }
-  input, select { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px; min-height: 44px; min-width: 0; }
-  .day { color: var(--muted); font-size: 13px; font-weight: 600; margin: 16px 0 6px; text-transform: uppercase; letter-spacing: .04em; }
-  .card { display: flex; gap: 10px; align-items: center; width: 100%; text-align: left; background: var(--panel); border: 1px solid var(--line);
-    border-radius: 12px; padding: 12px; margin-bottom: 8px; }
-  .card .who { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
-  .card .who b { display: block; font-size: 15px; }
-  .card .who span { color: var(--muted); font-size: 13px; }
-  .card .amt { text-align: right; flex: 0 0 auto; }
-  .card .amt b { display: block; }
-  .card .amt span { color: var(--muted); font-size: 13px; }
-  .flagdot { color: var(--warn); font-size: 13px; display: block; }
-  .empty { color: var(--muted); text-align: center; padding: 40px 16px; }
-  .kpis { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-bottom: 16px; }
-  .kpi { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px; min-width: 0; }
-  .kpi span { display: block; color: var(--muted); font-size: 13px; }
-  .kpi b { display: block; font-size: 20px; margin-top: 2px; overflow-wrap: anywhere; }
-  .kpi.big { grid-column: 1 / -1; }
-  .kpi.big b { font-size: 28px; }
-  h3 { font-size: 15px; margin: 20px 0 8px; }
-  .catrow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; align-items: baseline; margin-bottom: 10px; }
-  .catrow .name { overflow-wrap: anywhere; }
-  .catrow .val { color: var(--muted); font-size: 13px; text-align: right; }
-  .catrow .meter { grid-column: 1 / -1; height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; }
-  .catrow .meter i { display: block; height: 100%; background: var(--accent); border-radius: 4px; }
-  table { width: 100%; border-collapse: collapse; font-size: 14px; }
-  td, th { padding: 8px 4px; border-bottom: 1px solid var(--line); text-align: left; }
-  td.n, th.n { text-align: right; white-space: nowrap; }
+  #fallback { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 14px; padding: 24px; text-align: center; color: var(--muted); }
+  #fallback .btn { min-width: 220px; }
+
+  /* ---------- sheets (receipt detail, forms, settings) ---------- */
+  #setup { position: fixed; inset: 0; z-index: 50; background: var(--bg); overflow-y: auto; padding: calc(env(safe-area-inset-top) + 24px) 16px 32px; }
+  #setup h2 { font-size: 22px; margin: 0 0 12px; }
+  #setup p { color: var(--muted); }
+  #setup input { font: 15px monospace; margin: 4px 0 14px; }
   #sheet { position: fixed; inset: 0; z-index: 20; background: var(--bg); display: flex; flex-direction: column; }
-  #sheet .top { display: flex; align-items: center; gap: 8px; padding: calc(env(safe-area-inset-top) + 8px) 16px 8px; border-bottom: 1px solid var(--line); }
+  #sheet .top { display: flex; align-items: center; gap: 8px; padding: calc(env(safe-area-inset-top) + 8px) 12px 8px; border-bottom: 1px solid var(--line); }
   #sheet .top b { flex: 1 1 auto; min-width: 0; font-size: 17px; overflow-wrap: anywhere; }
-  #sheetBody { flex: 1 1 auto; overflow-y: auto; padding: 12px 16px calc(env(safe-area-inset-bottom) + 24px); }
-  .itemline { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; padding: 10px 0; border-bottom: 1px solid var(--line); }
-  .itemline .sub { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
-  .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
+  #sheetBody { flex: 1 1 auto; overflow-y: auto; padding: 14px 16px calc(env(safe-area-inset-bottom) + 28px); }
+  .detailtotal { font-size: 30px; font-weight: 750; letter-spacing: -.01em; }
+  .sub { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+  .itemline { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+  .itemline > div:nth-child(2) { font-weight: 600; text-align: right; white-space: nowrap; }
+  .itemline .sub:nth-child(4) { text-align: right; white-space: nowrap; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 18px; }
   .actions .btn { flex: 1 1 40%; }
-  .btn.danger { color: var(--bad); }
-  .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; font-size: 13px; color: var(--muted); }
-  .itemform { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px; margin-bottom: 8px;
+  .field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; font-size: 13px; color: var(--muted); font-weight: 600; }
+  .itemform { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 12px; margin-bottom: 8px;
     display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
   .itemform .wide { grid-column: 1 / -1; }
   .itemform label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); min-width: 0; }
   .itemform .line { grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: center; color: var(--muted); font-size: 13px; }
-  .formtotal { font-size: 17px; font-weight: 600; margin: 12px 0; }
-  #photoView { width: 100%; border-radius: 8px; background: #fff; }
-  #fallback { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 14px; padding: 24px; text-align: center; color: var(--muted); }
-  #fallback .btn { min-width: 220px; }
+  .formtotal { font-size: 19px; font-weight: 700; margin: 14px 0; }
+  #photoView { width: 100%; border-radius: 10px; background: #fff; margin-top: 14px; }
 </style>
 </head>
 <body>
@@ -146,18 +221,51 @@
     <h2>Unlock the app</h2>
     <p>Open the app from the link you saved when it was set up (it ends in <b>#k=…</b>). It unlocks by itself.</p>
     <p>Or paste the key from that link here:</p>
-    <label>Key<input id="setKey" placeholder="the long code after k=" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
-    <button id="setSave" class="btn primary">Unlock</button>
+    <label class="field">Key<input id="setKey" placeholder="the long code after k=" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+    <button id="setSave" class="btn primary wide">Unlock</button>
   </div>
-  <header>
-    <h1>Receipt Scanner</h1>
-    <div style="display:flex;gap:8px;align-items:center;min-width:0">
-      <button id="longBtn" class="chip" aria-pressed="false">Long receipt</button>
-    </div>
-  </header>
   <div id="conn"><span class="dot"></span><span class="msg">Connecting…</span><button id="connRetry" class="btn" hidden>Retry</button></div>
 
-  <div id="viewScan" class="view">
+  <div id="main">
+    <div id="viewHome" class="page">
+      <div class="ptitle">
+        <div><h1>Season expenses</h1><div class="sub" id="seasonLine"></div></div>
+        <button class="iconbtn" id="settingsBtn" aria-label="Season settings">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+        </button>
+      </div>
+      <div id="homeScans" hidden>
+        <div class="h2"><h2>Scans</h2><button class="link" id="clearScans">Clear finished</button></div>
+        <div class="card"><div id="log"></div></div>
+      </div>
+      <div id="home"><div class="empty">Loading your expenses…</div></div>
+    </div>
+
+    <div id="viewList" class="page" hidden>
+      <div class="ptitle">
+        <div><h1>Receipts</h1></div>
+        <button id="addBtn" class="btn primary">+ Add by hand</button>
+      </div>
+      <div class="search"><input id="search" type="search" placeholder="Search shops and items" autocomplete="off"></div>
+      <div class="chips" id="chips"></div>
+      <div class="listsum num" id="listSum"></div>
+      <div id="list"></div>
+    </div>
+  </div>
+
+  <nav id="nav">
+    <button class="tabbtn on" data-tab="home"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/></svg>Home</button>
+    <button id="scanBtn" aria-label="Scan a receipt"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/><path d="M8 12h8"/></svg>Scan</button>
+    <button class="tabbtn" data-tab="list"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2h12v20l-3-2-3 2-3-2-3 2z"/><path d="M9 7h6M9 11h6M9 15h4"/></svg>Receipts</button>
+  </nav>
+</div>
+
+<div id="scanner" hidden>
+  <div class="bar">
+    <button id="closeScan">✕ Close</button>
+    <b>Scan receipts</b>
+    <button id="longBtn" class="chip" aria-pressed="false">Long receipt</button>
+  </div>
   <div id="stage">
     <video id="video" playsinline muted autoplay></video>
     <canvas id="still" hidden></canvas>
@@ -188,47 +296,26 @@
     </button>
     <div class="side right"><button id="finishBtn" class="btn primary" hidden>Done</button></div>
   </div>
-
   <div class="controls" id="confirmControls" hidden>
     <div class="side"><button id="noBtn" class="btn">No, retake</button></div>
     <button id="adjustBtn" class="btn">Adjust</button>
     <div class="side right"><button id="yesBtn" class="btn primary">Yes, send</button></div>
   </div>
-
   <div class="controls" id="reviewControls" hidden>
     <div class="side"><button id="retakeBtn" class="btn">Retake</button></div>
     <button id="fullBtn" class="btn">Whole photo</button>
     <div class="side right"><button id="useBtn" class="btn primary">Use</button></div>
   </div>
-
-  <div id="log"></div>
-  </div>
-
-  <div id="viewList" class="view" hidden>
-    <div class="scroll" id="listScroll">
-      <div class="bar">
-        <input id="search" type="search" placeholder="Search shops and items" autocomplete="off">
-        <button id="addBtn" class="btn primary">+ Add by hand</button>
-      </div>
-      <div id="list"></div>
-    </div>
-  </div>
-
-  <div id="viewSum" class="view" hidden>
-    <div class="scroll" id="sum"></div>
-  </div>
-
-  <nav id="nav">
-    <button data-tab="scan" class="on">Scan</button>
-    <button data-tab="list">Receipts</button>
-    <button data-tab="sum">Summary</button>
-  </nav>
+  <div id="scanLast"></div>
 </div>
 
 <div id="sheet" hidden>
-  <div class="top"><button id="sheetBack" class="btn">Back</button><b id="sheetTitle"></b></div>
+  <div class="top"><button id="sheetBack" class="btn">‹ Back</button><b id="sheetTitle"></b></div>
   <div id="sheetBody"></div>
 </div>
+
+<div id="update" hidden><span>A new version of the app is ready.</span><button id="updateBtn">Update</button></div>
+<div id="toast" hidden></div>
 
 <!-- ======================= image maths: pure functions, no page access ======================= -->
 <script id="core">
@@ -744,7 +831,8 @@ if (typeof module !== 'undefined') module.exports = Core;
   var ctxO = overlay.getContext('2d');
   var small = document.createElement('canvas'), ctxS = small.getContext('2d', { willReadFrequently: true });
 
-  var state = 'starting';        // starting | live | review | busy | nocam
+  var state = 'off';             // off | starting | live | review | busy | nocam
+  var scannerOpen = false;       // the camera only runs while the scanner is open
   var longMode = false, sections = [];
   var tracker = null, prevGray = null, lastDet = null, loopTimer = null;
   var shot = null;               // { canvas, gray, w, h, quad }  - the photo under review
@@ -810,6 +898,8 @@ if (typeof module !== 'undefined') module.exports = Core;
   var IN_APP = /FBAN|FBAV|FB_IAB|FBIOS|Messenger|Instagram|Line\/|WhatsApp|Snapchat|LinkedInApp/i.test(navigator.userAgent);
 
   function startCamera() {
+    state = 'starting';
+    $('fallback').hidden = true; $('camControls').hidden = false; setHint('Starting camera…');
     if (IN_APP) return noCamera('This is open inside Facebook / Messenger, which blocks the camera. ' +
       'Tap \u2022\u2022\u2022 (top right) \u2192 Open in ' + (IOS ? 'Safari' : 'browser') + '. Until then you can still use:');
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return noCamera('This browser has no live camera access.');
@@ -817,14 +907,17 @@ if (typeof module !== 'undefined') module.exports = Core;
       audio: false,
       video: { facingMode: { ideal: 'environment' }, width: { ideal: 3840 }, height: { ideal: 2160 } }
     }).then(function (stream) {
+      if (!scannerOpen) { stream.getTracks().forEach(function (t) { t.stop(); }); throw { closed: true }; }
       video.srcObject = stream;
       return video.play();
     }).then(function () {
+      if (!scannerOpen) return;
       state = 'live';
       tracker = null;
       setHint('Hold the phone over the receipt');
       loop();
     }).catch(function (e) {
+      if (!scannerOpen || (e && e.closed)) return;
       noCamera(e && e.name === 'NotAllowedError'
         ? (IOS ? 'Camera access is blocked for this site. Safari: tap aA in the address bar \u2192 Website Settings \u2192 Camera \u2192 Allow, then reload. ' +
                  'Chrome on iPhone: Settings app \u2192 Apps \u2192 Chrome \u2192 Camera on. Meanwhile:'
@@ -844,7 +937,7 @@ if (typeof module !== 'undefined') module.exports = Core;
   // ---------------------------------------------------------------- live detection loop
   function loop() {
     clearTimeout(loopTimer);
-    if (state !== 'live' || tab !== 'scan') return;
+    if (state !== 'live' || !scannerOpen) return;
     var vw = video.videoWidth, vh = video.videoHeight;
     if (vw && vh) {
       var sw = DET_W, sh = Math.round(vh * DET_W / vw);
@@ -983,7 +1076,7 @@ if (typeof module !== 'undefined') module.exports = Core;
 
   var toastTimer = null;
   function toast(msg, action, fn) {
-    var el = $('countdown');
+    var el = $('toast');
     el.hidden = false; el.textContent = msg + '  ';
     if (action) {
       var b = document.createElement('button'); b.className = 'btn'; b.textContent = action; b.style.minHeight = '36px';
@@ -1281,6 +1374,7 @@ if (typeof module !== 'undefined') module.exports = Core;
       api('decide', { id: s.id, add: add }, 75000).then(function (r) { showResult(row, r); refreshData(); loadHeld(true); },
         function (e) { setRow(row, 'bad', 'Could not answer: ' + e.message); askDuplicate(row, s); });
     }
+    noteScan(row, 'wait', 'Possible duplicate. Close the scanner to answer it on Home.');
     addButton(row, 'Add anyway', function () { decide(true); });
     addButton(row, "Don't add", function () { decide(false); });
   }
@@ -1289,8 +1383,9 @@ if (typeof module !== 'undefined') module.exports = Core;
   function loadHeld(countOnly) {
     api('held', {}, 30000).then(function (r) {
       var held = r.held || [];
-      var b = document.querySelector('#nav [data-tab="scan"]');
-      b.innerHTML = 'Scan' + (held.length ? '<span class="badge">' + held.length + '</span>' : '');
+      var b = document.querySelector('#nav [data-tab="home"]'), badge = b.querySelector('.badge');
+      if (!badge) { badge = document.createElement('span'); badge.className = 'badge'; b.appendChild(badge); }
+      badge.textContent = held.length; badge.hidden = !held.length;
       if (countOnly) return;
       held.forEach(function (h) {
         if (rows.some(function (x) { return x.pendingId === h.id; })) return;
@@ -1337,7 +1432,7 @@ if (typeof module !== 'undefined') module.exports = Core;
     var st = document.createElement('div'); st.className = 'st';
     txt.appendChild(title); txt.appendChild(st);
     row.appendChild(img); row.appendChild(txt);
-    $('log').prepend(row);
+    $('log').prepend(row); showScans();
     var r = { el: row, st: st, retry: null, thumb: thumb, created: created };
     rows.push(r);
     return r;
@@ -1346,13 +1441,20 @@ if (typeof module !== 'undefined') module.exports = Core;
   function setRow(row, kind, msg, canRetry) {
     row.el.className = 'row ' + kind;
     row.st.textContent = msg;
+    noteScan(row, kind, msg);
     if (row.retry) { row.retry.remove(); row.retry = null; }
     if (canRetry && row.item) {
       var b = document.createElement('button'); b.className = 'btn'; b.textContent = 'Send now';
       b.onclick = function () { upload(row); };
       row.el.appendChild(b); row.retry = b;
     }
+  }  function noteScan(row, kind, msg) {
+    if (!scannerOpen || rows[rows.length - 1] !== row) return;
+    var box = $('scanLast'); box.textContent = '';
+    box.appendChild(document.createTextNode(row.el.querySelector('.txt div').textContent + ': '));
+    var sp = document.createElement('span'); sp.className = kind; sp.textContent = msg; box.appendChild(sp);
   }
+
 
 
   // ---------------------------------------------------------------- navigation
@@ -1405,86 +1507,375 @@ if (typeof module !== 'undefined') module.exports = Core;
     $(id).addEventListener('change', function () { fromFile(this.files[0]); this.value = ''; });
   });
   window.addEventListener('resize', function () { if (state === 'review') drawReview(); });
+  // Back from the background with the scanner open: iOS may have stopped the camera meanwhile.
   document.addEventListener('visibilitychange', function () {
-    if (!document.hidden && state === 'live') loop();
+    if (document.hidden || !scannerOpen) return;
+    var tr = video.srcObject && video.srcObject.getVideoTracks()[0];
+    if ((state === 'live' || state === 'starting') && (!tr || tr.readyState === 'ended')) { stopStream(); startCamera(); }
+    else if (state === 'live') loop();
   });
 
-  // ---------------------------------------------------------------- receipts, summary, add by hand
-  var tab = 'scan', DATA = null;
+  // ---------------------------------------------------------------- the scanner: only on while it is open
+  // The camera starts when Scan is tapped and is switched off (light goes out) when the scanner closes.
+  function openScanner() {
+    if (scannerOpen) return;
+    scannerOpen = true;
+    $('scanner').hidden = false;
+    $('scanLast').textContent = '';
+    startCamera();
+  }
+  function closeScanner() {
+    if (!scannerOpen) return;
+    if (longMode && sections.length && !confirm('Discard the ' + sections.length + ' part(s) of the long receipt captured so far?')) return;
+    stopCountdown(); closeAsk(); stopLoop(); stopStream();
+    shot = null; tracker = null;
+    still.hidden = true; video.style.visibility = '';
+    $('fallback').hidden = true; $('reviewControls').hidden = true; $('confirmControls').hidden = true; $('camControls').hidden = false;
+    longMode = false; sections = [];
+    $('longBtn').classList.remove('on'); $('longBtn').setAttribute('aria-pressed', 'false'); updateSections();
+    state = 'off'; scannerOpen = false;
+    $('scanner').hidden = true;
+    render();
+    applyUpdate();
+  }
+  function stopStream() {
+    var s = video.srcObject;
+    if (s) s.getTracks().forEach(function (t) { t.stop(); });
+    video.srcObject = null;
+  }
+  $('scanBtn').onclick = openScanner;
+  $('closeScan').onclick = closeScanner;
+
+  // ---------------------------------------------------------------- tabs
+  var tab = 'home', DATA = null, listFilter = 'all';
   function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
   function money(n) { return (Number(n) || 0).toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
   function aud(n) { return n == null ? '—' : 'A$' + money(n); }
-  function niceDay(d) {
-    if (!d) return '';
-    var p = String(d).split('-'), m = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][Number(p[1]) - 1];
-    return Number(p[2]) + ' ' + m + ' ' + p[0];
-  }
+  // Averages: cents below A$100, whole dollars above (easier to read at a glance).
+  function audShort(n) { return Math.abs(n) >= 100 ? 'A$' + Math.round(n).toLocaleString('en-AU') : 'A$' + money(n); }
+  var MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  var MONTH = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  function niceDay(d) { if (!d) return ''; var p = String(d).split('-'); return Number(p[2]) + ' ' + MON[Number(p[1]) - 1] + ' ' + p[0]; }
+  function shortDay(d) { var p = String(d).split('-'); return Number(p[2]) + ' ' + MON[Number(p[1]) - 1]; }
+  function weekday(d) { var p = d.split('-').map(Number); return ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][new Date(Date.UTC(p[0], p[1] - 1, p[2])).getUTCDay()]; }
   function todayStr() { var d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
   function dayNum(d) { var p = d.split('-').map(Number); return Date.UTC(p[0], p[1] - 1, p[2]) / 864e5; }
+  function dayStr(n) { var d = new Date(n * 864e5); return d.getUTCFullYear() + '-' + String(d.getUTCMonth() + 1).padStart(2, '0') + '-' + String(d.getUTCDate()).padStart(2, '0'); }
+  function sumAud(rs) { return rs.reduce(function (s, r) { return s + (r.total_aud || 0); }, 0); }
+  function plural(n, w) { return n + ' ' + w + (n === 1 ? '' : 's'); }
 
   function showTab(t) {
     tab = t;
-    ['scan', 'list', 'sum'].forEach(function (k) {
-      $('view' + { scan: 'Scan', list: 'List', sum: 'Sum' }[k]).hidden = k !== t;
-      document.querySelector('#nav [data-tab="' + k + '"]').classList.toggle('on', k === t);
-    });
-    $('longBtn').hidden = t !== 'scan';
-    if (t === 'scan') { if (state === 'live') loop(); }
-    else { stopLoop(); if (!DATA) refreshData(); else render(); }
+    $('viewHome').hidden = t !== 'home';
+    $('viewList').hidden = t !== 'list';
+    Array.prototype.forEach.call(document.querySelectorAll('#nav .tabbtn'), function (b) { b.classList.toggle('on', b.getAttribute('data-tab') === t); });
+    $('main').scrollTop = 0;
+    render();
   }
-  Array.prototype.forEach.call(document.querySelectorAll('#nav button'), function (b) { b.onclick = function () { showTab(b.getAttribute('data-tab')); }; });
+  Array.prototype.forEach.call(document.querySelectorAll('#nav .tabbtn'), function (b) { b.onclick = function () { showTab(b.getAttribute('data-tab')); }; });
 
+  // Last data seen is kept on the phone, so the dashboard shows at once when the app opens and then refreshes.
+  try { DATA = JSON.parse(localStorage.getItem('receiptScannerData') || 'null'); } catch (e) { DATA = null; }
   var refreshing = null;
   function refreshData() {
     if (!connected) return Promise.resolve();
     if (refreshing) return refreshing;
-    refreshing = api('data', {}, 30000).then(function (d) { DATA = d; render(); }, function () {}).finally(function () { refreshing = null; });
+    refreshing = api('data', {}, 30000).then(function (d) {
+      DATA = { settings: d.settings, receipts: d.receipts };
+      try { localStorage.setItem('receiptScannerData', JSON.stringify(DATA)); } catch (e) {}
+      render();
+    }, function () {}).finally(function () { refreshing = null; });
     return refreshing;
   }
-  function render() { if (!DATA) return; if (tab === 'list') renderList(); if (tab === 'sum') renderSummary(); }
+  function render() {
+    if (!DATA) return;
+    if (tab === 'home') renderHome();
+    if (tab === 'list') renderList();
+  }
+  window.addEventListener('resize', function () { if (tab === 'home' && DATA && !scannerOpen) drawWeekly(); });
 
-  // ---- Receipts: newest first, by day
-  $('search').addEventListener('input', function () { renderList(); });
-  function renderList() {
-    var box = $('list'); box.textContent = '';
-    var qy = $('search').value.trim().toLowerCase(), last = '';
-    var rs = DATA.receipts.filter(function (r) {
-      return !qy || r.merchant.toLowerCase().indexOf(qy) > -1 || r.items.some(function (i) { return i.description.toLowerCase().indexOf(qy) > -1; });
-    });
-    if (!rs.length) { box.appendChild(el('div', 'empty', qy ? 'Nothing matches “' + qy + '”.' : 'No receipts yet. Scan one, or add one by hand.')); return; }
-    rs.forEach(function (r) {
-      if (r.date !== last) { box.appendChild(el('div', 'day', niceDay(r.date))); last = r.date; }
-      var c = el('button', 'card'), who = el('div', 'who'), amt = el('div', 'amt');
-      who.appendChild(el('b', null, r.merchant || 'Unknown shop'));
-      who.appendChild(el('span', null, r.items.length + ' item' + (r.items.length === 1 ? '' : 's') + (r.source === 'manual' ? ' · typed in' : '')));
-      if (r.flags) who.appendChild(el('span', 'flagdot', 'Check: ' + r.flags));
-      amt.appendChild(el('b', null, money(r.total) + ' ' + r.currency));
-      amt.appendChild(el('span', null, aud(r.total_aud)));
-      c.appendChild(who); c.appendChild(amt);
-      c.onclick = function () { openReceipt(r); };
+  // ---------------------------------------------------------------- Home: the season at a glance
+  function stats() {
+    var season = DATA.settings.season, start = season.start, end = season.end, today = todayStr();
+    var inSeason = DATA.receipts.filter(function (r) { return r.date >= start && r.date <= end; });
+    var upTo = today < end ? today : end;
+    var days = Math.max(0, dayNum(upTo) - dayNum(start) + 1), seasonDays = dayNum(end) - dayNum(start) + 1;
+    var spent = sumAud(inSeason), perDay = days ? spent / days : 0;
+    return { start: start, end: end, today: today, upTo: upTo, inSeason: inSeason, days: days, seasonDays: seasonDays, spent: spent, perDay: perDay };
+  }
+
+  var weekState = null;   // what the weekly chart draws, kept so it can be redrawn on resize / tap
+  function renderHome() {
+    var box = $('home'); box.textContent = '';
+    var S = stats();
+    $('seasonLine').textContent = niceDay(S.start) + ' – ' + niceDay(S.end);
+
+    // To check
+    var flagged = S.inSeason.filter(function (r) { return r.flags; });
+    if (flagged.length) {
+      var c = el('button', 'callout'); c.appendChild(el('i', 'dotw'));
+      c.appendChild(el('span', null, plural(flagged.length, 'receipt') + ' to check'));
+      c.appendChild(el('span', 'go', 'View ›'));
+      c.onclick = function () { listFilter = 'check'; showTab('list'); };
       box.appendChild(c);
+    }
+
+    // Hero: spent so far, season progress, projection
+    var hero = el('div', 'card hero');
+    hero.appendChild(el('div', 'label', 'Spent so far this season'));
+    hero.appendChild(el('div', 'big num', 'A$' + money(S.spent)));
+    var tr = el('div', 'track'), fill = el('i'); fill.style.width = Math.min(100, S.days / S.seasonDays * 100) + '%'; tr.appendChild(fill); hero.appendChild(tr);
+    var r2 = el('div', 'row2');
+    if (S.today < S.start) r2.appendChild(el('span', null, 'The season starts on ' + niceDay(S.start)));
+    else {
+      r2.appendChild(el('span', null, 'Day ' + S.days + ' of ' + S.seasonDays));
+      r2.appendChild(el('span', null, S.today >= S.end ? 'Season finished' : plural(S.seasonDays - S.days, 'day') + ' to go'));
+    }
+    hero.appendChild(r2);
+    if (S.days && S.today < S.end) {
+      var pj = el('div', 'proj');
+      pj.appendChild(document.createTextNode('At this pace the whole season will cost '));
+      pj.appendChild(el('b', 'num', 'A$' + Math.round(S.perDay * S.seasonDays).toLocaleString('en-AU')));
+      hero.appendChild(pj);
+    }
+    box.appendChild(hero);
+
+    // Averages
+    var tiles = el('div', 'tiles');
+    [['Per day', S.perDay], ['Per week', S.perDay * 7], ['Per month', S.perDay * 30.4]].forEach(function (t) {
+      var d = el('div', 'tile'); d.appendChild(el('div', 'label', t[0])); d.appendChild(el('b', 'num', audShort(t[1]))); tiles.appendChild(d);
+    });
+    box.appendChild(tiles);
+    var missing = S.inSeason.filter(function (r) { return r.total_aud == null; }).length;
+    if (missing) box.appendChild(el('div', 'note warnnote', plural(missing, 'receipt') + ' still waiting for an exchange rate, so not in the A$ totals yet. This fills in by itself.'));
+
+    // Last 7 days vs the 7 before
+    var t0 = dayNum(S.today);
+    var last7 = sumAud(S.inSeason.filter(function (r) { var n = dayNum(r.date); return n > t0 - 7 && n <= t0; }));
+    var prev7 = sumAud(S.inSeason.filter(function (r) { var n = dayNum(r.date); return n > t0 - 14 && n <= t0 - 7; }));
+    var h = heading('This week'); box.appendChild(h);
+    var wk = el('div', 'card'), cmp = el('div', 'cmp');
+    var a = el('div'); a.appendChild(el('div', 'label', 'Last 7 days')); a.appendChild(el('b', 'num', 'A$' + money(last7))); cmp.appendChild(a);
+    var b = el('div'); b.appendChild(el('div', 'label', 'The 7 days before')); b.appendChild(el('b', 'num', 'A$' + money(prev7))); cmp.appendChild(b);
+    wk.appendChild(cmp);
+    if (prev7 > 0) {
+      var ch = (last7 - prev7) / prev7 * 100, up = ch > 0;
+      wk.appendChild(el('span', 'trend ' + (up ? 'up' : 'down'), Math.abs(ch) < 0.5 ? 'About the same as the week before'
+        : (up ? '▲ ' : '▼ ') + Math.round(Math.abs(ch)) + '% ' + (up ? 'more' : 'less') + ' than the week before'));
+    }
+    box.appendChild(wk);
+
+    // Weekly chart
+    box.appendChild(heading('Week by week'));
+    var cc = el('div', 'card chart'); cc.id = 'weekly';
+    var cap = el('div', 'cap'); cap.id = 'weekCap'; cc.appendChild(cap);
+    box.appendChild(cc);
+    var weeks = Math.max(1, Math.ceil(S.days / 7)), vals = [], counts = [];
+    for (var w = 0; w < weeks; w++) { vals.push(0); counts.push(0); }
+    S.inSeason.forEach(function (r) {
+      var k = Math.floor((dayNum(r.date) - dayNum(S.start)) / 7);
+      if (k >= 0 && k < weeks) { vals[k] += r.total_aud || 0; counts[k]++; }
+    });
+    weekState = { start: S.start, vals: vals, counts: counts, sel: weeks - 1, avg: S.perDay * 7, upTo: S.upTo };
+    drawWeekly();
+    cc.appendChild(el('div', 'note', 'Tap a bar to see that week. Dashed line: your average week (' + audShort(S.perDay * 7) + ').'));
+
+    // Categories
+    box.appendChild(heading('Where it goes'));
+    var cats = {}, catN = {};
+    S.inSeason.forEach(function (r) { r.items.forEach(function (i) { cats[i.category] = (cats[i.category] || 0) + (i.aud || 0); catN[i.category] = (catN[i.category] || 0) + 1; }); });
+    var names = Object.keys(cats).sort(function (x, y) { return cats[y] - cats[x]; });
+    var cbox = el('div', 'card');
+    if (!names.length) cbox.appendChild(el('div', 'empty', 'Nothing logged this season yet.'));
+    var top = names.length ? cats[names[0]] : 0, itemTotal = names.reduce(function (s, n) { return s + cats[n]; }, 0);
+    names.forEach(function (n) {
+      var row = el('button', 'catrow'), t = el('div', 'top');
+      t.appendChild(el('div', 'name', n));
+      var v = el('div', 'val num', 'A$' + money(cats[n]));
+      v.appendChild(el('small', null, (itemTotal ? Math.round(cats[n] / itemTotal * 100) : 0) + '%'));
+      t.appendChild(v); row.appendChild(t);
+      var trk = el('div', 'track'), f = el('i'); f.style.width = (top ? Math.max(2, cats[n] / top * 100) : 0) + '%'; trk.appendChild(f); row.appendChild(trk);
+      row.onclick = function () { openCategory(n, S); };
+      cbox.appendChild(row);
+    });
+    box.appendChild(cbox);
+
+    // Months
+    box.appendChild(heading('Month by month'));
+    var mbox = el('div', 'card'), months = monthsOf(S);
+    if (!months.length) mbox.appendChild(el('div', 'empty', 'Nothing yet.'));
+    months.slice().reverse().forEach(function (m) {
+      var row = el('div', 'mrow');
+      row.appendChild(el('div', 'name', MONTH[m.m - 1] + ' ' + m.y));
+      row.appendChild(el('div', 'val num', 'A$' + money(m.spent)));
+      row.appendChild(el('div', 'sub num', plural(m.count, 'receipt') + ' · ' + audShort(m.spent / m.days) + ' a day' + (m.partial ? ' so far' : '')));
+      mbox.appendChild(row);
+    });
+    box.appendChild(mbox);
+
+    // Latest receipts
+    var hl = heading('Latest receipts', 'See all', function () { listFilter = 'all'; showTab('list'); });
+    box.appendChild(hl);
+    var latest = DATA.receipts.slice(0, 5);
+    if (!latest.length) box.appendChild(el('div', 'empty', 'No receipts yet. Tap Scan to add your first one.'));
+    latest.forEach(function (r) { box.appendChild(receiptCard(r, true)); });
+  }
+
+  function heading(text, linkText, fn) {
+    var h = el('div', 'h2'); h.appendChild(el('h2', null, text));
+    if (linkText) { var b = el('button', 'link', linkText + ' ›'); b.onclick = fn; h.appendChild(b); }
+    return h;
+  }
+
+  function monthsOf(S) {
+    var out = [], p = S.start.split('-').map(Number), y = p[0], m = p[1];
+    while (true) {
+      var first = y + '-' + String(m).padStart(2, '0') + '-01';
+      if (first > S.end || first > S.upTo) break;
+      var next = m === 12 ? (y + 1) + '-01-01' : y + '-' + String(m + 1).padStart(2, '0') + '-01';
+      var mr = S.inSeason.filter(function (r) { return r.date >= first && r.date < next; });
+      var from = first < S.start ? S.start : first, lastDay = dayNum(next) - 1, to = Math.min(lastDay, dayNum(S.upTo));
+      out.push({ y: y, m: m, key: first.slice(0, 7), spent: sumAud(mr), count: mr.length, days: Math.max(1, to - dayNum(from) + 1), partial: to < lastDay });
+      m++; if (m > 12) { m = 1; y++; }
+    }
+    return out;
+  }
+
+  // Bars drawn at the card's real pixel width (no viewBox scaling, so text stays the size written).
+  function drawWeekly() {
+    var card = $('weekly'); if (!card || !weekState) return;
+    var old = card.querySelector('svg'); if (old) old.remove();
+    var W = Math.max(200, card.clientWidth - 32), H = 150, base = 120, ws = weekState, n = ws.vals.length;
+    var max = Math.max.apply(null, ws.vals.concat([ws.avg, 1])) * 1.1;
+    var slot = W / n, bw = Math.max(3, Math.min(28, slot * 0.68));
+    var NS = 'http://www.w3.org/2000/svg', svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('width', W); svg.setAttribute('height', H); svg.setAttribute('role', 'img');
+    svg.setAttribute('aria-label', 'Spending per week this season');
+    function add(tag, at) { var e = document.createElementNS(NS, tag); for (var k in at) e.setAttribute(k, at[k]); svg.appendChild(e); return e; }
+    add('line', { x1: 0, x2: W, y1: base + 0.5, y2: base + 0.5, stroke: '#262b33' });
+    ws.vals.forEach(function (v, i) {
+      var bh = Math.max(v > 0 ? 3 : 0, v / max * (base - 6)), x = i * slot + (slot - bw) / 2;
+      add('rect', { x: x, y: base - bh, width: bw, height: bh, rx: Math.min(4, bw / 2), fill: '#3ddc84', 'fill-opacity': i === ws.sel ? 1 : 0.38 });
+    });
+    if (ws.avg > 0) { var ay = base - ws.avg / max * (base - 6); add('line', { x1: 0, x2: W, y1: ay, y2: ay, stroke: '#f3f5f7', 'stroke-opacity': 0.55, 'stroke-dasharray': '4 4' }); }
+    // Month names under the first week of each month; skipped when too close to the previous label.
+    var lastX = -999;
+    ws.vals.forEach(function (v, i) {
+      var d = dayStr(dayNum(ws.start) + i * 7), prev = i ? dayStr(dayNum(ws.start) + (i - 1) * 7) : null;
+      if (i && d.slice(5, 7) === prev.slice(5, 7)) return;
+      var x = i * slot + slot / 2;
+      if (x - lastX < 34) return;
+      var t = add('text', { x: Math.min(W - 16, Math.max(16, x)), y: H - 8, 'text-anchor': 'middle', fill: '#9aa3ae', 'font-size': 13 });
+      t.textContent = MON[Number(d.slice(5, 7)) - 1]; lastX = x;
+    });
+    function pick(ev) {
+      var r = svg.getBoundingClientRect(), i = Math.floor((ev.clientX - r.left) / slot);
+      if (i >= 0 && i < n && i !== ws.sel) { ws.sel = i; drawWeekly(); }
+    }
+    svg.addEventListener('pointerdown', pick);
+    card.insertBefore(svg, card.children[1] || null);
+    var from = dayStr(dayNum(ws.start) + ws.sel * 7), to = dayStr(Math.min(dayNum(from) + 6, dayNum(ws.upTo)));
+    var cap = $('weekCap'); cap.textContent = '';
+    var l = el('div'); l.appendChild(el('div', 'label', ws.sel === n - 1 ? 'This week' : 'Week ' + (ws.sel + 1)));
+    l.appendChild(el('b', 'num', 'A$' + money(ws.vals[ws.sel]))); cap.appendChild(l);
+    cap.appendChild(el('span', null, shortDay(from) + ' – ' + shortDay(to) + '\n' + plural(ws.counts[ws.sel], 'receipt')));
+    cap.lastChild.style.whiteSpace = 'pre-line';
+  }
+
+  function openCategory(name, S) {
+    var body = openSheet(name), rows = [];
+    S.inSeason.forEach(function (r) { r.items.forEach(function (i) { if (i.category === name) rows.push({ r: r, i: i }); }); });
+    var total = rows.reduce(function (s, x) { return s + (x.i.aud || 0); }, 0);
+    body.appendChild(el('div', 'label', 'This season'));
+    body.appendChild(el('div', 'detailtotal num', 'A$' + money(total)));
+    body.appendChild(el('div', 'sub', plural(rows.length, 'item') + ' · ' + audShort(S.days ? total / S.days * 7 : 0) + ' a week on average'));
+    var last = '';
+    rows.forEach(function (x) {
+      if (x.r.date !== last) { var d = el('div', 'day'); d.appendChild(el('span', null, shortDay(x.r.date))); body.appendChild(d); last = x.r.date; }
+      var line = el('button', 'itemline'); line.style.width = '100%'; line.style.textAlign = 'left';
+      line.appendChild(el('div', null, x.i.description));
+      line.appendChild(el('div', 'num', aud(x.i.aud)));
+      line.appendChild(el('div', 'sub', x.r.merchant + (Number(x.i.qty) === 1 ? '' : ' · ' + x.i.qty + ' × ' + money(x.i.unit_price))));
+      line.appendChild(el('div', 'sub num', money(x.i.line_total) + ' ' + x.r.currency));
+      line.onclick = function () { openReceipt(x.r); };
+      body.appendChild(line);
     });
   }
 
-  function openSheet(title) { $('sheetTitle').textContent = title; $('sheetBody').textContent = ''; $('sheet').hidden = false; stopLoop(); return $('sheetBody'); }
-  function closeSheet() { $('sheet').hidden = true; if (tab === 'scan' && state === 'live') loop(); }
+  // ---------------------------------------------------------------- Receipts: search, filters, by day
+  $('search').addEventListener('input', function () { renderList(); });
+  function receiptCard(r, withDay) {
+    var c = el('button', 'rc'), who = el('div', 'who'), amt = el('div', 'amt');
+    c.appendChild(el('div', 'ico', (r.merchant || '?').replace(/[^A-Za-zÀ-ž0-9]/g, '').charAt(0).toUpperCase() || '?'));
+    who.appendChild(el('b', null, r.merchant || 'Unknown shop'));
+    var bits = [];
+    if (withDay) bits.push(shortDay(r.date));
+    bits.push(plural(r.items.length, 'item'));
+    if (r.source === 'manual') bits.push('typed in');
+    who.appendChild(el('span', null, bits.join(' · ')));
+    if (r.flags) who.appendChild(el('span', 'flagdot', 'Check: ' + r.flags));
+    amt.appendChild(el('b', 'num', money(r.total) + ' ' + r.currency));
+    amt.appendChild(el('span', 'num', aud(r.total_aud)));
+    c.appendChild(who); c.appendChild(amt);
+    c.onclick = function () { openReceipt(r); };
+    return c;
+  }
+  function renderList() {
+    var chips = $('chips'); chips.textContent = '';
+    var flaggedN = DATA.receipts.filter(function (r) { return r.flags; }).length;
+    var months = {}; DATA.receipts.forEach(function (r) { months[r.date.slice(0, 7)] = true; });
+    var opts = [['all', 'All']];
+    if (flaggedN) opts.push(['check', 'To check (' + flaggedN + ')']);
+    Object.keys(months).sort().reverse().forEach(function (k) { opts.push([k, MON[Number(k.slice(5)) - 1] + ' ' + k.slice(2, 4)]); });
+    if (!opts.some(function (o) { return o[0] === listFilter; })) listFilter = 'all';
+    opts.forEach(function (o) {
+      var b = el('button', 'chip' + (o[0] === listFilter ? ' on' : ''), o[1]);
+      b.onclick = function () { listFilter = o[0]; renderList(); };
+      chips.appendChild(b);
+    });
+
+    var box = $('list'); box.textContent = '';
+    var qy = $('search').value.trim().toLowerCase();
+    var rs = DATA.receipts.filter(function (r) {
+      if (listFilter === 'check' && !r.flags) return false;
+      if (/^\d{4}-\d{2}$/.test(listFilter) && r.date.slice(0, 7) !== listFilter) return false;
+      return !qy || (r.merchant || '').toLowerCase().indexOf(qy) > -1 ||
+        r.items.some(function (i) { return i.description.toLowerCase().indexOf(qy) > -1 || (i.original_text || '').toLowerCase().indexOf(qy) > -1; });
+    });
+    $('listSum').textContent = rs.length ? plural(rs.length, 'receipt') + ' · A$' + money(sumAud(rs)) : '';
+    if (!rs.length) { box.appendChild(el('div', 'empty', qy ? 'Nothing matches “' + qy + '”.' : 'No receipts here yet. Tap Scan, or add one by hand.')); return; }
+    var byDay = {}; rs.forEach(function (r) { byDay[r.date] = (byDay[r.date] || 0) + (r.total_aud || 0); });
+    var last = '';
+    rs.forEach(function (r) {
+      if (r.date !== last) {
+        var d = el('div', 'day'); d.appendChild(el('span', null, weekday(r.date).slice(0, 3) + ' ' + niceDay(r.date)));
+        d.appendChild(el('span', 'num', 'A$' + money(byDay[r.date]))); box.appendChild(d); last = r.date;
+      }
+      box.appendChild(receiptCard(r, false));
+    });
+  }
+
+  function openSheet(title) { $('sheetTitle').textContent = title; $('sheetBody').textContent = ''; $('sheetBody').scrollTop = 0; $('sheet').hidden = false; return $('sheetBody'); }
+  function closeSheet() { $('sheet').hidden = true; if (updatePending) applyUpdate(); }
   $('sheetBack').onclick = closeSheet;
 
   function openReceipt(r) {
     var body = openSheet(r.merchant || 'Receipt');
-    body.appendChild(el('div', 'formtotal', money(r.total) + ' ' + r.currency + '  ·  ' + aud(r.total_aud)));
-    var meta = [niceDay(r.date)];
+    body.appendChild(el('div', 'detailtotal num', money(r.total) + ' ' + r.currency));
+    body.appendChild(el('div', 'sub num', aud(r.total_aud)));
+    var meta = [weekday(r.date) + ' ' + niceDay(r.date)];
     if (r.receipt_time) meta.push(r.receipt_time);
     if (r.receipt_no) meta.push('No. ' + r.receipt_no);
     if (r.payment) meta.push(r.payment);
-    body.appendChild(el('div', 'sub', meta.join(' · ')));
+    if (r.source === 'manual') meta.push('typed in');
+    var m = el('div', 'sub', meta.join(' · ')); m.style.marginTop = '6px'; body.appendChild(m);
     if (r.flags) body.appendChild(el('div', 'flagdot', 'Check: ' + r.flags));
     r.items.forEach(function (i) {
       var line = el('div', 'itemline');
       line.appendChild(el('div', null, i.description));
-      line.appendChild(el('div', null, money(i.line_total)));
-      line.appendChild(el('div', 'sub', i.category + ' · ' + (Number(i.qty) === 1 ? '' : i.qty + ' × ') + money(i.unit_price) + (i.original_text ? ' · ' + i.original_text : '')));
-      line.appendChild(el('div', 'sub', aud(i.aud)));
+      line.appendChild(el('div', 'num', money(i.line_total)));
+      line.appendChild(el('div', 'sub', i.category + (Number(i.qty) === 1 ? '' : ' · ' + i.qty + ' × ' + money(i.unit_price)) + (i.original_text ? ' · ' + i.original_text : '')));
+      line.appendChild(el('div', 'sub num', aud(i.aud)));
       body.appendChild(line);
     });
     var acts = el('div', 'actions');
@@ -1498,7 +1889,7 @@ if (typeof module !== 'undefined') module.exports = Core;
       };
       acts.appendChild(ph);
     } else if (r.drive_file) {
-      body.appendChild(el('div', 'sub', 'Photo kept in Google Drive: ' + r.drive_file));
+      var dn = el('div', 'sub', 'Photo kept in Google Drive: ' + r.drive_file); dn.style.marginTop = '12px'; body.appendChild(dn);
     }
     var ed = el('button', 'btn', 'Edit'); ed.onclick = function () { openForm(r); }; acts.appendChild(ed);
     var del = el('button', 'btn danger', 'Delete');
@@ -1523,7 +1914,7 @@ if (typeof module !== 'undefined') module.exports = Core;
     ['TRY', 'AUD', 'USD', 'EUR'].forEach(function (c) { var o = el('option', null, c); o.value = c; cur.appendChild(o); });
     cur.value = editing ? r.currency : 'TRY'; field('Currency', cur);
     var list = el('div'); body.appendChild(list);
-    var total = el('div', 'formtotal');
+    var total = el('div', 'formtotal num');
     function itemBox(it) {
       var box = el('div', 'itemform');
       function inp(label, cls, node) { var l = el('label', cls, label); l.appendChild(node); box.appendChild(l); return node; }
@@ -1551,7 +1942,7 @@ if (typeof module !== 'undefined') module.exports = Core;
     (editing ? r.items : [null]).forEach(itemBox);
     var add = el('button', 'btn', '+ Another item'); add.onclick = function () { itemBox(null).querySelector('input').focus(); };
     body.appendChild(add); body.appendChild(total);
-    var save = el('button', 'btn primary', editing ? 'Save changes' : 'Save receipt'); save.style.width = '100%';
+    var save = el('button', 'btn primary wide', editing ? 'Save changes' : 'Save receipt');
     var msg = el('div', 'flagdot');
     save.onclick = function () {
       var items = boxes().map(function (b) { return b._get(); });
@@ -1569,83 +1960,70 @@ if (typeof module !== 'undefined') module.exports = Core;
   }
   $('addBtn').onclick = function () { openForm(null); };
 
-  // ---- Summary: the season so far, worked out the way the Google Sheet dashboard does
-  function renderSummary() {
-    var box = $('sum'); box.textContent = '';
-    var season = DATA.settings.season, start = season.start, end = season.end, today = todayStr();
-    var inSeason = DATA.receipts.filter(function (r) { return r.date >= start && r.date <= end; });
-    var upTo = today < end ? today : end;
-    var days = Math.max(0, dayNum(upTo) - dayNum(start) + 1), seasonDays = dayNum(end) - dayNum(start) + 1;
-    var spent = inSeason.reduce(function (s, r) { return s + (r.total_aud || 0); }, 0);
-    var perDay = days ? spent / days : 0;
-    var weekAgo = dayNum(today) - 6;
-    var last7 = inSeason.filter(function (r) { return dayNum(r.date) >= weekAgo && r.date <= today; }).reduce(function (s, r) { return s + (r.total_aud || 0); }, 0);
-    var missing = inSeason.filter(function (r) { return r.total_aud == null; }).length;
-    var k = el('div', 'kpis');
-    function kpi(label, value, big) { var d = el('div', 'kpi' + (big ? ' big' : '')); d.appendChild(el('span', null, label)); d.appendChild(el('b', null, value)); k.appendChild(d); }
-    kpi('Spent so far this season', 'A$' + money(spent), true);
-    kpi('Average per day', 'A$' + money(perDay));
-    kpi('Average per week', 'A$' + money(perDay * 7));
-    kpi('Average per month', 'A$' + money(perDay * 30.4));
-    kpi('Projected season total', 'A$' + money(perDay * seasonDays));
-    kpi('Last 7 days', 'A$' + money(last7));
-    kpi('Days into season', days + ' of ' + seasonDays);
-    kpi('Receipts logged', String(inSeason.length));
-    kpi('To check', String(inSeason.filter(function (r) { return r.flags; }).length));
-    box.appendChild(k);
-    if (missing) box.appendChild(el('div', 'flagdot', missing + ' receipt(s) are waiting for an exchange rate and are not in the AUD totals yet (filled in automatically).'));
-
-    box.appendChild(el('h3', null, 'By category'));
-    var cats = {};
-    inSeason.forEach(function (r) { r.items.forEach(function (i) { cats[i.category] = (cats[i.category] || 0) + (i.aud || 0); }); });
-    var names = Object.keys(cats).sort(function (a, b) { return cats[b] - cats[a]; });
-    var top = names.length ? cats[names[0]] : 0;
-    if (!names.length) box.appendChild(el('div', 'empty', 'Nothing logged this season yet.'));
-    names.forEach(function (n) {
-      var row = el('div', 'catrow'), meter = el('div', 'meter'), bar = el('i');
-      row.appendChild(el('div', 'name', n));
-      row.appendChild(el('div', 'val', 'A$' + money(cats[n]) + ' · ' + (spent ? Math.round(cats[n] / spent * 1000) / 10 : 0) + '%'));
-      bar.style.width = (top ? Math.max(2, cats[n] / top * 100) : 0) + '%';
-      meter.appendChild(bar); row.appendChild(meter); box.appendChild(row);
-    });
-
-    box.appendChild(el('h3', null, 'By month'));
-    var t = el('table'), head = el('tr');
-    ['Month', 'Receipts', 'Spent', 'Per day'].forEach(function (h, i) { head.appendChild(el('th', i ? 'n' : null, h)); });
-    t.appendChild(head);
-    var p = start.split('-').map(Number), y = p[0], m = p[1];
-    while (true) {
-      var first = y + '-' + String(m).padStart(2, '0') + '-01';
-      if (first > end || first > today) break;
-      var next = m === 12 ? (y + 1) + '-01-01' : y + '-' + String(m + 1).padStart(2, '0') + '-01';
-      var mr = inSeason.filter(function (r) { return r.date >= first && r.date < next; });
-      var ms = mr.reduce(function (s, r) { return s + (r.total_aud || 0); }, 0);
-      var from = first < start ? start : first, to = dayNum(next) - 1 < dayNum(upTo) ? dayNum(next) - 1 : dayNum(upTo);
-      var md = Math.max(1, to - dayNum(from) + 1);
-      var tr = el('tr');
-      tr.appendChild(el('td', null, ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][m - 1] + ' ' + String(y).slice(2)));
-      tr.appendChild(el('td', 'n', String(mr.length)));
-      tr.appendChild(el('td', 'n', 'A$' + money(ms)));
-      tr.appendChild(el('td', 'n', 'A$' + money(ms / md)));
-      t.appendChild(tr);
-      m++; if (m > 12) { m = 1; y++; }
-    }
-    box.appendChild(t);
-
-    box.appendChild(el('h3', null, 'Season dates'));
-    var s1 = el('input'), s2 = el('input'); s1.type = s2.type = 'date'; s1.value = start; s2.value = end;
+  // ---- Settings: season dates, connection, version
+  $('settingsBtn').onclick = function () {
+    var body = openSheet('Settings');
+    var season = DATA ? DATA.settings.season : { start: '', end: '' };
+    body.appendChild(el('div', 'label', 'Season dates'));
+    var s1 = el('input'), s2 = el('input'); s1.type = s2.type = 'date'; s1.value = season.start; s2.value = season.end;
     var f1 = el('label', 'field', 'Start'); f1.appendChild(s1); var f2 = el('label', 'field', 'End'); f2.appendChild(s2);
-    var sv = el('button', 'btn', 'Save season dates'), sm = el('div', 'flagdot');
+    f1.style.marginTop = '10px';
+    var sv = el('button', 'btn primary wide', 'Save season dates'), sm = el('div', 'flagdot');
     sv.onclick = function () {
       sv.disabled = true;
       api('settings', { start: s1.value, end: s2.value }).then(function () { sv.disabled = false; toast('Season dates saved'); refreshData(); },
         function (e) { sv.disabled = false; sm.textContent = e.message; });
     };
-    box.appendChild(f1); box.appendChild(f2); box.appendChild(sv); box.appendChild(sm);
-  }
+    body.appendChild(f1); body.appendChild(f2); body.appendChild(sv); body.appendChild(sm);
+    var st = el('div', 'sub', (connected ? 'Connected' : 'Not connected') + ' · app version ' + (BUILD ? BUILD.slice(0, 7) : 'unknown') +
+      ' · updates install themselves');
+    st.style.marginTop = '28px'; body.appendChild(st);
+  };
 
+  // ---------------------------------------------------------------- scans in progress (shown on Home)
+  function showScans() { $('homeScans').hidden = !$('log').children.length; }
+  $('clearScans').onclick = function () {
+    rows = rows.filter(function (r) {
+      var keep = !r.done || r.el.hasAttribute('data-ask');
+      if (!keep) r.el.remove();
+      return keep;
+    });
+    showScans();
+  };
+
+  // ---------------------------------------------------------------- updates install themselves
+  // Each deploy has its own version. The app asks for it when it opens, whenever it comes back to the
+  // front, and every 10 minutes; when it changes, the app reloads itself (straight away if nothing is
+  // in progress, otherwise as soon as you finish). The home-screen icon never needs re-adding.
+  var BUILD = null, updatePending = false;
+  function checkUpdate() {
+    return fetch('/api?version=1', { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (j) {
+      if (!j || !j.version) return;
+      if (!BUILD) { BUILD = j.version; return; }
+      if (j.version !== BUILD) { updatePending = true; applyUpdate(); }
+    }).catch(function () {});
+  }
+  function busyNow() { return scannerOpen || !$('sheet').hidden || rows.some(function (r) { return r.busy; }); }
+  function applyUpdate() {
+    if (!updatePending) return;
+    if (busyNow()) { $('update').hidden = false; return; }
+    location.reload();
+  }
+  $('updateBtn').onclick = function () {
+    if (scannerOpen && (pending || shot || sections.length) && !confirm('Update now? The photo on screen has not been sent yet.')) return;
+    location.reload();
+  };
+  setInterval(function () { if (!document.hidden) checkUpdate(); }, 10 * 60 * 1000);
+
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) return;
+    checkUpdate();
+    if (connected) { refreshData(); loadHeld(true); }
+  });
+
+  showTab('home');
+  checkUpdate();
   checkConnection().then(function (ok) { resumeOutbox(); if (ok) { loadHeld(); refreshData(); } });
-  startCamera();
 })();
 </script>
 </body>

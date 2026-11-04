@@ -1,5 +1,9 @@
 {
   "rewrites": [{ "source": "/", "destination": "/app/index.html" }],
+  "headers": [
+    { "source": "/", "headers": [{ "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }] },
+    { "source": "/app/(.*)", "headers": [{ "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }] }
+  ],
   "functions": { "api/index.js": { "maxDuration": 60 } },
   "crons": [{ "path": "/api?cron=1", "schedule": "17 3 * * *" }]
 }
