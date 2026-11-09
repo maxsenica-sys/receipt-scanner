@@ -206,6 +206,14 @@ const check = (name, ok, extra) => { console.log((ok ? 'PASS ' : 'FAIL ') + name
       await page.waitForFunction(() => !window.__old, null, { timeout: 10000 }).catch(() => {});
       check('closing the scanner -> update applied', await page.evaluate(() => !window.__old));
       await ctx.close(); }
+    // J. The Google Apps Script is an older deployment -> the phone says so, with the fix, instead of "Connected"
+    { F.googleOld(true);
+      const { ctx, page } = await open();
+      const shown = await page.waitForFunction(() => /Google Sheet backup is not working/.test(document.getElementById('conn').textContent), null, { timeout: 30000 }).then(() => true, () => false);
+      check('old Google script -> warning shown on the phone, with the fix', shown && await page.isVisible('#conn') && /New version/.test(await page.textContent('#conn')),
+        (await page.textContent('#conn')).slice(0, 70));
+      F.googleOld(false);
+      await ctx.close(); }
   } catch (e) {
     console.log('FAIL (crashed) ' + e.stack); fail++;
   }

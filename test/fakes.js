@@ -14,6 +14,7 @@ const json = (res, code, obj) => { res.writeHead(code, { 'content-type': 'applic
 
 async function start() {
   const files = {}, tokens = {}, claudeCalls = [], googleCalls = [];
+  let googleOld = false;
   let claudeReply = null, claudeFail = 0, fxCalls = 0, storageDown = false;
 
   const storage = await listen(async (req, res) => {
@@ -72,6 +73,7 @@ async function start() {
   const google = await listen(async (req, res) => {
     const b = JSON.parse((await readBody(req)).toString());
     googleCalls.push(b);
+    if (googleOld && ['record', 'unrecord', 'backupCheck'].includes(b.action)) return json(res, 200, { ok: false, error: 'Unknown action ' + b.action });
     json(res, 200, { ok: true });
   });
 
@@ -81,7 +83,7 @@ async function start() {
            FX_URL: base(fx), GOOGLE_BACKUP_URL: base(google) + '/macros/s/test/exec', GOOGLE_BACKUP_KEY: 'gkey' },
     files, claudeCalls, googleCalls,
     setClaude: r => { claudeReply = r; }, failClaude: n => { claudeFail = n; }, fxCalls: () => fxCalls,
-    storageDown: v => { storageDown = v; },
+    storageDown: v => { storageDown = v; }, googleOld: v => { googleOld = v; },
     close: () => [storage, claude, fx, google].forEach(s => s.close())
   };
 }

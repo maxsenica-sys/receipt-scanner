@@ -80,9 +80,9 @@ async function backup(id) {
       items: r.items.map(i => ({ description: i.description, original_text: i.original_text, category: i.category,
                                  qty: Number(i.qty), unit_price: Number(i.unit_price) })) },
       image: image, mime: r.photo_mime });
-    await S.q("update receipts set backup_status = 'done', backup_error = null where id = $1", [id]);
+    await S.q("update receipts set backup_status = 'done', backup_error = null, backup_tried_at = now() where id = $1", [id]);
   } catch (e) {
-    await S.q("update receipts set backup_status = 'failed', backup_error = $2 where id = $1", [id, String(e.message).slice(0, 300)]);
+    await S.q("update receipts set backup_status = 'failed', backup_error = $2, backup_tried_at = now() where id = $1", [id, String(e.message).slice(0, 300)]);
   }
 }
 function unbackupLater(rid) {
@@ -233,8 +233,28 @@ async function allData() {
 
 // ---------------------------------------------------------------- health check
 // Run when the app opens: every service the app depends on, tested for real.
+// Receipts that should be in Google and are not: failed, or still pending well after they were saved,
+// and not tried in the last few minutes (so opening the app twice does not send them twice).
+const BACKLOG = `from receipts where backup_status in ('pending', 'failed') and created_at < now() - interval '5 minutes'
+                 and (backup_tried_at is null or backup_tried_at < now() - interval '5 minutes')`;
+async function resendBacklog(limit) {
+  const todo = await S.q('select id ' + BACKLOG + ' order by created_at limit ' + Number(limit));
+  for (const r of todo) await backup(r.id);
+  return todo.length;
+}
+// Is the Google side able to take a copy? An older Apps Script deployment answers "Unknown action".
+async function googleCheck() {
+  if (!process.env.GOOGLE_BACKUP_URL) return null;
+  try { await S.google('backupCheck', {}, 20000); return null; }
+  catch (e) {
+    if (/Unknown action/.test(e.message)) return 'OLD';
+    return 'Google backup unreachable: ' + e.message.replace(/^Google backup:\s*/, '');
+  }
+}
+
 async function ping() {
   const problems = [];
+  const gcheck = googleCheck();
   ['DATABASE_URL', 'SUPABASE_URL', 'SUPABASE_SECRET_KEY', 'ANTHROPIC_API_KEY'].forEach(k => { if (!process.env[k]) problems.push(k + ' is not set in Vercel.'); });
   try { await S.q('select 1 from settings limit 1'); } catch (e) { problems.push('Database: ' + e.message); }
   try {   // a real signed upload, exactly as the phone does it, then removed
@@ -243,8 +263,15 @@ async function ping() {
     if (!put.ok) throw new Error('upload answered HTTP ' + put.status);
     await S.photos.remove(path);
   } catch (e) { problems.push('Photo storage: ' + e.message); }
-  const failed = (await S.q("select count(*)::int as n from receipts where backup_status = 'failed'").catch(() => [{ n: 0 }]))[0].n;
-  if (failed) problems.push(failed + ' receipt(s) not yet copied to Google - retried daily.');
+  const waiting = (await S.q("select count(*)::int as n from receipts where backup_status in ('pending', 'failed') and created_at < now() - interval '5 minutes'")
+    .catch(() => [{ n: 0 }]))[0].n;
+  const g = await gcheck;
+  const n = waiting ? waiting + ' receipt' + (waiting === 1 ? ' is' : 's are') + ' waiting to be copied to the Google Sheet. ' : '';
+  if (g === 'OLD') problems.push('Google Sheet backup is not working: the spreadsheet\'s Apps Script is an older version. ' + n +
+    'Fix: paste the new Code.gs into the Apps Script editor, then Deploy > Manage deployments > edit > New version > Deploy. Waiting receipts then copy over by themselves.');
+  else if (g) problems.push(g + (n ? ' ' + n + 'They are retried automatically.' : ''));
+  else if (waiting) waitUntil(resendBacklog(5).catch(() => {}));     // Google is fine: send the backlog now, in the background
+
   const pending = (await S.q('select count(*)::int as n from pending').catch(() => [{ n: 0 }]))[0].n;
   return { sheet: 'Receipt Scanner', problems: problems, pending: pending };
 }
@@ -260,8 +287,7 @@ async function cron() {
     await S.q('update items set aud = round(line_total * $2, 2) where receipt_id = $1', [r.id, rate]);
     out.aud++;
   }
-  const todo = await S.q("select id from receipts where backup_status in ('pending', 'failed') and created_at < now() - interval '10 minutes' limit 10");
-  for (const r of todo) { await backup(r.id); out.backups++; }
+  out.backups = await resendBacklog(20);
   return out;
 }
 
@@ -269,6 +295,7 @@ async function cron() {
 async function handle(b) {
   switch (b.action) {
     case 'ping':      return ping();
+    case 'warm':      await S.q('select 1'); return {};
     case 'uploadUrl': { const mime = b.mime; if (!OK_MIME.includes(mime)) throw new Error('Unsupported file type ' + mime);
                         const path = newPath(mime); return { path: path, url: await S.photos.signedUpload(path) }; }
     case 'scan':      if (!/^\d{4}\/\d{2}\/[0-9a-f-]{36}\.(jpg|pdf)$/.test(String(b.path))) throw new Error('Bad upload path');
@@ -319,4 +346,4 @@ module.exports = async (req, res) => {
   }
 };
 module.exports.config = { maxDuration: 60 };
-module.exports._internal = { scan, place, decide, manual, edit, remove, allData, ping, cron, backup, settings };
+module.exports._internal = { scan, place, decide, manual, edit, remove, allData, ping, cron, backup, settings, resendBacklog };

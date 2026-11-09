@@ -175,6 +175,9 @@ function doPost(e) {
       case 'held':    out = { held: heldList_() }; break;
       case 'record':  out = recordFromApp_(req.receipt, req.image, req.mime); break;
       case 'unrecord': out = unrecordFromApp_(req.rid); break;
+      // The receipt app asks this when it opens: an older deployment answers "Unknown action",
+      // which tells the app the new version has not been deployed yet.
+      case 'backupCheck': out = { backupVersion: 2 }; break;
       default: throw new Error('Unknown action ' + req.action);
     }
     out.ok = true;

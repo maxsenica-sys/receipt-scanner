@@ -57,6 +57,48 @@ test('health check passes, including a real signed upload round trip', async () 
   assert.ok(r.ok, r.error); assert.deepEqual(r.problems, []);
 });
 
+test('old Google script: the health check says so plainly, with the fix and how many are waiting', async () => {
+  F.googleOld(true);
+  try {
+    await scanBytes(photo()); await settle();
+    assert.equal((await S.q('select backup_status from receipts'))[0].backup_status, 'failed');
+    await S.q("update receipts set created_at = now() - interval '1 hour', backup_tried_at = now() - interval '1 hour'");
+    F.googleCalls.length = 0;
+    const r = await call('ping');
+    assert.equal(r.problems.length, 1, JSON.stringify(r.problems));
+    assert.match(r.problems[0], /Google Sheet backup is not working/);
+    assert.match(r.problems[0], /1 receipt is waiting/);
+    assert.match(r.problems[0], /New version/);
+    await settle();
+    assert.deepEqual(F.googleCalls.map(c => c.action), ['backupCheck'], 'no copies are sent to a script that cannot take them');
+  } finally { F.googleOld(false); }
+});
+
+test('Google script fixed: opening the app sends the waiting receipts by itself, once', async () => {
+  await scanBytes(photo()); F.setClaude(reply({ merchant: 'BIM' })); await scanBytes(photo()); await settle();
+  assert.equal((await S.q('select count(*)::int n from receipts'))[0].n, 2);
+  await S.q("update receipts set backup_status = 'failed', backup_error = 'Google backup: Unknown action record', created_at = now() - interval '1 hour', backup_tried_at = now() - interval '1 hour'");
+  F.googleCalls.length = 0;
+  const r = await call('ping');
+  assert.deepEqual(r.problems, []);
+  await settle(); await settle();
+  assert.deepEqual((await S.q('select backup_status, backup_error from receipts')).map(x => x.backup_status + ':' + x.backup_error), ['done:null', 'done:null']);
+  assert.equal(F.googleCalls.filter(c => c.action === 'record').length, 2);
+  F.googleCalls.length = 0;
+  await call('ping'); await settle();
+  assert.equal(F.googleCalls.filter(c => c.action === 'record').length, 0, 'nothing sent twice');
+});
+
+test('a receipt saved moments ago is not resent while its first copy may still be on its way', async () => {
+  await scanBytes(photo()); await settle();
+  await S.q("update receipts set backup_status = 'pending', backup_tried_at = null");
+  F.googleCalls.length = 0;
+  await call('ping'); await settle();
+  assert.equal(F.googleCalls.filter(c => c.action === 'record').length, 0);
+});
+
+test('warm-up answers', async () => { assert.equal((await call('warm')).ok, true); });
+
 test('wrong key is refused', async () => {
   const r = await new Promise(res => api({ method: 'POST', url: '/api', headers: {}, body: { action: 'data', key: 'nope' } },
     { setHeader() {}, status() { return this; }, json: res }));
@@ -241,7 +283,7 @@ test('data: every receipt with its items and the settings', async () => {
 test('daily maintenance fills a missing AUD amount and retries a failed backup', async () => {
   const r = await scanBytes(photo());
   await settle();
-  await S.q("update receipts set total_aud = null, backup_status = 'failed', created_at = now() - interval '1 hour'");
+  await S.q("update receipts set total_aud = null, backup_status = 'failed', created_at = now() - interval '1 hour', backup_tried_at = now() - interval '1 hour'");
   await S.q('update items set aud = null');
   F.googleCalls.length = 0;
   const out = await new Promise(res => api({ method: 'GET', url: '/api?cron=1', headers: {} }, { setHeader() {}, status() { return this; }, json: res }));

@@ -23,7 +23,8 @@ create table if not exists receipts (
   notes          text,
   confidence     text,
   backup_status  text not null default 'pending',   -- pending | done | failed | off
-  backup_error   text
+  backup_error   text,
+  backup_tried_at timestamptz                      -- last attempt to copy it to Google
 );
 create index if not exists receipts_date_idx on receipts (receipt_date);
 
