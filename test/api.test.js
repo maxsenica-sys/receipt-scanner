@@ -69,6 +69,7 @@ test('old Google script: the health check says so plainly, with the fix and how 
     assert.match(r.problems[0], /Google Sheet backup is not working/);
     assert.match(r.problems[0], /1 receipt is waiting/);
     assert.match(r.problems[0], /New version/);
+    assert.ok(r.problems[0].includes(process.env.GOOGLE_BACKUP_URL.match(/\/s\/([^/]+)\/exec/)[1].slice(-6)));
     await settle();
     assert.deepEqual(F.googleCalls.map(c => c.action), ['backupCheck'], 'no copies are sent to a script that cannot take them');
   } finally { F.googleOld(false); }

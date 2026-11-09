@@ -267,8 +267,14 @@ async function ping() {
     .catch(() => [{ n: 0 }]))[0].n;
   const g = await gcheck;
   const n = waiting ? waiting + ' receipt' + (waiting === 1 ? ' is' : 's are') + ' waiting to be copied to the Google Sheet. ' : '';
-  if (g === 'OLD') problems.push('Google Sheet backup is not working: the spreadsheet\'s Apps Script is an older version. ' + n +
-    'Fix: paste the new Code.gs into the Apps Script editor, then Deploy > Manage deployments > edit > New version > Deploy. Waiting receipts then copy over by themselves.');
+  if (g === 'OLD') {
+    // Which deployment the app calls, so it can be matched in Deploy > Manage deployments (the end of its Deployment ID).
+    const dep = (String(process.env.GOOGLE_BACKUP_URL).match(/\/s\/([^/]+)\/exec/) || [])[1] || '';
+    problems.push('Google Sheet backup is not working: the Apps Script deployment the app uses is still the older version. ' + n +
+      (dep ? 'The app calls the deployment whose ID ends in ' + dep.slice(-6) + '. ' : '') +
+      'Fix: in Deploy > Manage deployments, edit THAT deployment (pencil), set Version to New version, Deploy. ' +
+      '(Deploy > New deployment makes a different link the app does not use.) Waiting receipts then copy over by themselves.');
+  }
   else if (g) problems.push(g + (n ? ' ' + n + 'They are retried automatically.' : ''));
   else if (waiting) waitUntil(resendBacklog(5).catch(() => {}));     // Google is fine: send the backlog now, in the background
 
